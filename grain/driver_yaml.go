@@ -28,7 +28,7 @@ func (d *YamlDriver) Load(_ context.Context, actorType string, id string, dst an
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return yaml.NewDecoder(f).Decode(dst)
 }
 
@@ -41,7 +41,7 @@ func (d *YamlDriver) Save(_ context.Context, actorType string, id string, src an
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return yaml.NewEncoder(f).Encode(src)
 }
 

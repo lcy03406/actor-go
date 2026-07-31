@@ -2,6 +2,7 @@ package grain
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -308,7 +309,7 @@ func TestJsonDriver_LoadNotFound(t *testing.T) {
 
 	var loaded TestGrainSnapshot
 	err := d.Load(context.Background(), "test", "no-such-actor", &loaded)
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
 	}
 }
@@ -964,4 +965,4 @@ func (f *failingLeaseManager) Acquire(_ context.Context, _, _ string) (*lease.Le
 	return nil, lease.ErrNotAcquired
 }
 func (f *failingLeaseManager) Release(_ context.Context, _ *lease.Lease) error { return nil }
-func (f *failingLeaseManager) Renew(_ context.Context, _ *lease.Lease) error  { return nil }
+func (f *failingLeaseManager) Renew(_ context.Context, _ *lease.Lease) error   { return nil }

@@ -2,6 +2,7 @@ package grain
 
 import (
 	"context"
+	"errors"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -71,7 +72,7 @@ func (d *MongoDriver) Load(ctx context.Context, actorType string, id string, dst
 	var doc mongoDoc
 	doc.Snapshot = dst
 	err := col.FindOne(ctx, bson.M{"_id": id}).Decode(&doc)
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return ErrNotFound
 	}
 	return err

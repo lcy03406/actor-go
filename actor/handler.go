@@ -38,7 +38,9 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(gb groupBase[A], id A, re
 		req: req,
 		ch:  ch,
 	}
-	a.send(i)
+	if err := a.send(i); err != nil {
+		return nil, err
+	}
 	return ch, nil
 }
 
@@ -53,7 +55,9 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerPost(gb groupBase[A], id A, re
 		h:   h,
 		req: req,
 	}
-	a.send(i)
+	if err := a.send(i); err != nil {
+		return err
+	}
 	return nil
 }
 

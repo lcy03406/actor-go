@@ -421,12 +421,33 @@ state.RenewLease(ctx)  // manual lease renewal (auto if RenewInterval > 0)
 
 ## Cluster
 
-The `cluster` package provides distributed Actor placement across multiple nodes:
+The `cluster` package provides the building blocks for distributed Actor
+placement across multiple nodes:
 
-- **Membership**: node discovery and health checks
-- **Placement**: decides which node owns each Actor
-- **Routing**: forwards messages to the owning node
-- **Transport**: node-to-node communication
+- **Membership**: node discovery and health checks (`Membership` interface,
+  `StaticMembership` implementation)
+- **Placement**: decides which node owns each Actor (`PlacementStrategy`
+  interface, `ConsistentHashPlacement` implementation)
+- **Routing**: per-message route decision (`Route` / `RouteResult`, returns
+  `RouteLocal` / `RouteForward` / `RouteFail`)
+- **Transport**: node-to-node message forwarding (`Transport` interface,
+  `HTTPTransport` implementation)
+
+> **Status — building blocks only, not yet wired into a forwarding path.**
+> The pieces above are implemented and unit-tested, but no code in the
+> project currently uses them to forward a real message. Specifically:
+>
+> - No caller invokes `Cluster.Resolve()` and then acts on a `RouteForward`
+>   result by calling `Transport.ForwardCall` / `ForwardPost`. The only
+>   references live in `cluster_test.go`.
+> - No HTTP handler is registered for the `/cluster/{actorType}` endpoint
+>   that `HTTPTransport` posts to. A receiving node needs this handler to
+>   unpack a `RoutedMessage` and dispatch it to the local `actor.Manager`.
+>
+> `grain` only handles leasing and persistence; it does not participate in
+> message forwarding. Closing this gap — an auto-forward layer that bridges
+> `Resolve` and `Transport`, plus the matching server-side handler — is
+> planned to live in the `cluster` package itself.
 
 ## Design Highlights
 

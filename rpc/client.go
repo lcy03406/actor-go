@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -13,6 +14,12 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+// ErrClientClosed 表示 RPC 客户端已关闭。
+var ErrClientClosed = errors.New("rpc client closed")
+
+// ErrRpcCallFailed 表示 RPC 调用失败。
+var ErrRpcCallFailed = errors.New("rpc call failed")
 
 type result[M Message] struct {
 	repM  M
@@ -48,11 +55,16 @@ func (c *Client[M, C, T]) Connect() error {
 	u := url.URL{Scheme: "ws", Host: c.serverAddr, Path: "/rpc"}
 	c.logger.Info("connecting to RPC server", "url", u.String())
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	conn, resp, err := websocket.DefaultDialer.DialContext(context.Background(), u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("rpc client connect failed: %w", err)
 	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	c.connMu.Lock()
 	c.conn = conn
+	c.connMu.Unlock()
 
 	go c.readResponses()
 
@@ -75,7 +87,7 @@ func (c *Client[M, C, T]) Close() {
 	}
 	c.pendingMu.Unlock()
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 }
 
@@ -128,6 +140,8 @@ func Post[M Message, C Codec[M], T Transport[M], A actor.ActorId, Q actor.Reques
 	if err != nil {
 		return err
 	}
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -160,7 +174,9 @@ func Call[M Message, C Codec[M], T Transport[M], A actor.ActorId, Q actor.Reques
 		c.pendingMu.Unlock()
 	}()
 
+	c.connMu.Lock()
 	err = c.conn.WriteMessage(websocket.TextMessage, data)
+	c.connMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -168,10 +184,10 @@ func Call[M Message, C Codec[M], T Transport[M], A actor.ActorId, Q actor.Reques
 	select {
 	case resp := <-ch:
 		if resp.Error != "" {
-			return nil, fmt.Errorf("rpc call error: %s", resp.Error)
+			return nil, fmt.Errorf("%w: %s", ErrRpcCallFailed, resp.Error)
 		}
 		rep := new(R0)
-		err := d.Decode(resp.repM, rep)
+		err = d.Decode(resp.repM, rep)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +195,7 @@ func Call[M Message, C Codec[M], T Transport[M], A actor.ActorId, Q actor.Reques
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.done:
-		return nil, fmt.Errorf("rpc client closed")
+		return nil, ErrClientClosed
 	}
 }
 
@@ -204,6 +220,8 @@ func Broadcast[M Message, C Codec[M], T Transport[M], A actor.ActorId, Q actor.R
 	if err != nil {
 		return err
 	}
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
@@ -232,5 +250,7 @@ func Multicast[M Message, C Codec[M], T Transport[M], A actor.ActorId, Q actor.R
 	if err != nil {
 		return err
 	}
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }

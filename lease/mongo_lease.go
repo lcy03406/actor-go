@@ -119,7 +119,7 @@ func (m *mongoLeaseManager) acquireOnce(ctx context.Context, key, owner string) 
 	var doc mongoLeaseDoc
 	err := m.col.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
 
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		// 文档不存在，尝试插入新文档
 		doc := mongoLeaseDoc{
 			Key:        key,
@@ -244,6 +244,7 @@ func (m *mongoLeaseManager) renewOnce(ctx context.Context, lease *Lease) error {
 	}
 	return nil
 }
+
 // isTransientNetErr 判断是否为瞬态网络错误（可重试）。
 // 在 retry.go 通用实现基础上，额外检查 MongoDB 特有的网络/超时错误。
 func isTransientNetErr(err error) bool {

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -42,7 +43,7 @@ func (s *Server[M, C, T]) Start() error {
 	s.server = &http.Server{Addr: s.addr, Handler: mux}
 	s.logger.Info("RPC server starting", "addr", s.addr)
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.logger.Error("RPC server error", "error", err)
 		}
 	}()
@@ -73,7 +74,7 @@ func (s *Server[M, C, T]) handleRPC(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("websocket upgrade failed", "error", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	s.logger.Info("RPC client connected", "remote", r.RemoteAddr)
 
@@ -119,7 +120,7 @@ func (s *Server[M, C, T]) handleRPC(w http.ResponseWriter, r *http.Request) {
 				s.sendError(conn, seq, encErr.Error())
 				continue
 			}
-			conn.WriteMessage(websocket.TextMessage, respBytes)
+			_ = conn.WriteMessage(websocket.TextMessage, respBytes)
 		}
 	}
 }
@@ -131,5 +132,5 @@ func (s *Server[M, C, T]) sendError(conn *websocket.Conn, seq uint64, errMsg str
 	var t T
 	var repM M
 	respBytes, _ := t.EncodeRep(seq, repM, errMsg)
-	conn.WriteMessage(websocket.TextMessage, respBytes)
+	_ = conn.WriteMessage(websocket.TextMessage, respBytes)
 }

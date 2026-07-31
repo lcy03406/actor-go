@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 )
+
+// ErrRemoteCallFailed 表示远程调用失败。
+var ErrRemoteCallFailed = errors.New("remote call failed")
 
 // Transport 是集群内节点间通信的传输层接口。
 //
@@ -33,11 +37,11 @@ type Transport interface {
 // RoutedMessage 是集群路由消息的通用格式。
 // 编解码由具体的 Transport 实现负责。
 type RoutedMessage struct {
-	ActorType  string          `json:"actor_type"`
-	ActorId    json.RawMessage `json:"actor_id"`
-	ReqType    string          `json:"req_type"`
-	Req        json.RawMessage `json:"req"`
-	Method     string          `json:"method"` // "call" / "post" / "broadcast"
+	ActorType string          `json:"actor_type"`
+	ActorId   json.RawMessage `json:"actor_id"`
+	ReqType   string          `json:"req_type"`
+	Req       json.RawMessage `json:"req"`
+	Method    string          `json:"method"` // "call" / "post" / "broadcast"
 }
 
 // RoutedReply 是集群路由回复的通用格式。
@@ -80,14 +84,14 @@ func (t *HTTPTransport) ForwardCall(ctx context.Context, target Node, msg *Route
 	if err != nil {
 		return nil, fmt.Errorf("forward call to %s: %w", target.ID, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var reply RoutedReply
 	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
 		return nil, err
 	}
 	if reply.Error != "" {
-		return &reply, fmt.Errorf("remote error: %s", reply.Error)
+		return &reply, fmt.Errorf("%w: %s", ErrRemoteCallFailed, reply.Error)
 	}
 	return &reply, nil
 }
@@ -111,7 +115,9 @@ func (t *HTTPTransport) ForwardPost(ctx context.Context, target Node, msg *Route
 	if err != nil {
 		return fmt.Errorf("forward post to %s: %w", target.ID, err)
 	}
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		return fmt.Errorf("forward post to %s: close body: %w", target.ID, err)
+	}
 	return nil
 }
 

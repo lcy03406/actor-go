@@ -1,5 +1,7 @@
 package cluster
 
+import "errors"
+
 // RouteDecision 表示路由决策结果。
 type RouteDecision int
 
@@ -86,6 +88,9 @@ func (e *RouteError) Error() string {
 
 // IsRouteError 判断 error 是否为路由错误。
 func IsRouteError(err error) (*RouteError, bool) {
-	re, ok := err.(*RouteError)
-	return re, ok
+	var re *RouteError
+	if errors.As(err, &re) {
+		return re, true
+	}
+	return nil, false
 }

@@ -18,10 +18,10 @@ import (
 // ─── Type Aliases (for readability) ───
 
 type (
-	PlayerId       = grainPlayerId
-	GrainState     = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
-	GrainCtx       = actor.ActorContext[PlayerId, GrainState]
-	RegBuilder     = actor.RegistryBuilder[PlayerId, GrainState]
+	PlayerId   = grainPlayerId
+	GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
+	GrainCtx   = actor.ActorContext[PlayerId, GrainState]
+	RegBuilder = actor.RegistryBuilder[PlayerId, GrainState]
 )
 
 // ─── Type Definitions ───
@@ -116,7 +116,7 @@ func main() {
 	// Create PersistenceManager with JSON file driver and local lease
 	pm := grain.NewPersistenceManager(
 		grain.WithDriver(grain.NewJsonDriver("./grain_data")),
-		grain.WithLeaseManager(lease.NewLocalManager(30 * time.Second)),
+		grain.WithLeaseManager(lease.NewLocalManager(30*time.Second)),
 		grain.WithNodeId("node-1"),
 		grain.WithRenewInterval(30*time.Second),
 	)

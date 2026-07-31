@@ -9,10 +9,7 @@ type timerInvoke[A ActorId, S anyState] struct {
 }
 
 func (i *timerInvoke[A, S]) Allow(id A, spawning bool) bool {
-	if spawning {
-		return false
-	}
-	return true
+	return !spawning
 }
 
 func (i *timerInvoke[A, S]) Invoke(actor *ActorContext[A, S], spawning bool) {

@@ -13,7 +13,7 @@ func (s *ShotSelf[D]) NewPersist(data *D) *D {
 }
 
 func (s *ShotSelf[D]) LoadSnapshot(data *D, persist *D) {
-	if persist == data {
+	if persist == nil || persist == data {
 		return
 	}
 	*data = *persist

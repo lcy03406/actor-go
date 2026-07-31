@@ -91,12 +91,14 @@ func (ct *ContextTimer) Stop() {
 
 // Timer 在指定延迟后向 Actor 自身发送回调，返回可取消的 Timer Id。
 func (a *ActorContext[A, S]) Timer(d time.Duration, fn func()) int {
-	a.timerId += 1
+	a.timerId++
 	id := a.timerId
 	i := &timerInvoke[A, S]{fn, id, nil}
 	actor := a.actor
 	timer := time.AfterFunc(d, func() {
-		actor.send(i)
+		if err := actor.send(i); err != nil {
+			actor.logger.Error("timer send failed", "error", err)
+		}
 	})
 	i.t = timer
 	if a.timers == nil {

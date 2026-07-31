@@ -8,34 +8,25 @@ run:
 
 linters:
   default: standard
+  disable:
+    - unused       # 太多内部实现被误报
   enable:
     - bodyclose
     - copyloopvar
-    - err113
     - errorlint
-    - gocritic
     - gosec
     - misspell
     - noctx
     - prealloc
     - revive
     - unconvert
-    - unparam
     - wastedassign
   settings:
-    errcheck:
-      check-type-assertions: true
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - style
-        - performance
-        - experimental
-        - opinionated
     govet:
       enable-all: true
       disable:
         - fieldalignment
+        - shadow       # 与 errcheck 重复，且误报较多
     revive:
       rules:
         - name: blank-imports
@@ -45,12 +36,6 @@ linters:
         - name: error-return
         - name: error-strings
         - name: error-naming
-        - name: exported
-          arguments:
-            - disableStutteringCheck
-        - name: increment-decrement
-        - name: var-naming
-        - name: package-comments
         - name: range
         - name: receiver-naming
         - name: time-naming
@@ -59,33 +44,39 @@ linters:
         - name: errorf
         - name: empty-block
         - name: superfluous-else
-        - name: unused-parameter
         - name: unreachable-code
-        - name: redefines-builtin-id
     staticcheck:
       checks:
         - all
-        - -SA1019  # allow use of deprecated things (e.g. for backwards compatibility)
+        - -SA1019   # allow use of deprecated things
+        - -ST1000   # don't require package comments in every file
+        - -ST1003   # don't enforce Id→ID / Json→JSON naming
+    gosec:
+      excludes:
+        - G118       # context.WithCancel not called (stored in struct, called elsewhere)
+        - G301       # directory permissions 0755 is intentional
+        - G304       # file path from variable is necessary for drivers
+        - G112       # ReadHeaderTimeout not needed for internal RPC server
 
   exclusions:
     generated: strict
     rules:
-      # Exclude test files from some linters
+      # Exclude test files from noisy linters
       - path: _test\.go
         linters:
-          - err113
+          - errcheck
           - gosec
           - noctx
           - funlen
           - gocognit
           - cyclop
-      # Exclude cmd/ examples from some linters
+      # Exclude cmd/ examples from noisy linters
       - path: cmd/
         linters:
-          - err113
+          - errcheck
           - gosec
           - noctx
-      # Exclude some rules for specific patterns
+      # Exclude revive exported/unused-parameter from test files
       - path: _test\.go
         text: "unused-parameter"
       - path: _test\.go

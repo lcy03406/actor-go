@@ -222,7 +222,9 @@ func TestStaticMembership(t *testing.T) {
 		t.Fatal("expected non-nil events channel")
 	}
 
-	m.Close()
+	if err := m.Close(); err != nil {
+		t.Errorf("close failed: %v", err)
+	}
 }
 
 func TestCluster_Resolve(t *testing.T) {

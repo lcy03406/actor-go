@@ -155,7 +155,9 @@ func Finalize[A ActorId, Q Request[A, OkReply, Q0, Ok], Q0 any](mgr *Manager, re
 	if err != nil {
 		return
 	}
-	gh.h.handlerBroadcast(gh.g, req)
+	if _, err := gh.h.handlerBroadcast(gh.g, req); err != nil {
+		mgr.logger.Error("finalize broadcast failed", "error", err)
+	}
 	gh.g.joinGroup()
 	mgr.logger.Info("finalized actor type", "type", actorTypeOf[A]())
 }

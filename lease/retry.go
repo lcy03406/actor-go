@@ -23,10 +23,7 @@ func isTransientNetErrBase(err error) bool {
 		return netErr.Timeout() || netErr.Temporary()
 	}
 	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		return true
-	}
-	return false
+	return errors.As(err, &dnsErr)
 }
 
 // sleepBackoff 指数退避等待，最大 2 秒。

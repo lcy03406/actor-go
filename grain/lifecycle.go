@@ -24,6 +24,7 @@
 package grain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -103,7 +104,7 @@ func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.Act
 	var t T
 	snapshot := t.NewPersist(&state.Data)
 	err = pm.driver.Load(ctx.Context(), actorType, id.String(), snapshot)
-	if err != nil && err != ErrNotFound {
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		ctx.Logger().Error("grain activate: load failed", "id", id, "err", err)
 		_ = pm.leaseManager.Release(ctx.Context(), le)
 		return err

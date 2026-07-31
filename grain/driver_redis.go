@@ -9,6 +9,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// ErrRedisUnmarshalFailed 表示 Redis 驱动反序列化失败：dst 类型不满足要求。
+var ErrRedisUnmarshalFailed = errors.New("grain: RedisDriver: dst must implement encoding.BinaryUnmarshaler, json.Unmarshaler, or be *[]byte")
+
+// ErrRedisMarshalFailed 表示 Redis 驱动序列化失败：src 类型不满足要求。
+var ErrRedisMarshalFailed = errors.New("grain: RedisDriver: src must implement encoding.BinaryMarshaler, json.Marshaler, or be []byte")
+
 // RedisDriver 基于 Redis 的持久化驱动。
 // Key 格式：{prefix}{actorType}:{id}
 // 使用 SETNX + generation 实现 fencing token 防止过期写入。
@@ -69,7 +75,7 @@ func (d *RedisDriver) Load(ctx context.Context, actorType string, id string, dst
 	}
 
 	_ = gen
-	return errors.New("grain: RedisDriver: dst must implement encoding.BinaryUnmarshaler, json.Unmarshaler, or be *[]byte")
+	return ErrRedisUnmarshalFailed
 }
 
 func (d *RedisDriver) Save(ctx context.Context, actorType string, id string, src any, gen int64) error {
@@ -93,7 +99,7 @@ func (d *RedisDriver) Save(ctx context.Context, actorType string, id string, src
 	case []byte:
 		data = v
 	default:
-		return errors.New("grain: RedisDriver: src must implement encoding.BinaryMarshaler, json.Marshaler, or be []byte")
+		return ErrRedisMarshalFailed
 	}
 
 	pipe := d.client.TxPipeline()

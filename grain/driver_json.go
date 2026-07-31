@@ -44,7 +44,7 @@ func (d *JsonDriver) Load(_ context.Context, actorType string, id string, dst an
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return json.NewDecoder(f).Decode(dst)
 }
 
@@ -57,7 +57,7 @@ func (d *JsonDriver) Save(_ context.Context, actorType string, id string, src an
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(src)
