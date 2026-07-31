@@ -65,17 +65,17 @@ func (e *HandlerNotAllowedError) Error() string {
 	return fmt.Sprintf("handler not allowed: %s:%s", e.Id, e.Req)
 }
 
-// HadnlerCallError 表示 Actor 调用过程中发生异常。
-type HadnlerCallError struct {
+// HandlerCallError 表示 Actor 调用过程中发生异常。
+type HandlerCallError struct {
 	ActorId ActorIdBase
 	Req     string
 	Cause   error
 }
 
-func (e *HadnlerCallError) Error() string {
+func (e *HandlerCallError) Error() string {
 	return fmt.Sprintf("handler call error [%s]: %v", e.ActorId, e.Cause)
 }
 
-func (e *HadnlerCallError) Unwrap() error {
+func (e *HandlerCallError) Unwrap() error {
 	return e.Cause
 }

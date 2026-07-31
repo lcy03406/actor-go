@@ -1279,9 +1279,9 @@ func TestActorHandlerPanic(t *testing.T) {
 		t.Error("expected error when handler panics")
 		return
 	}
-	var hce *actor.HadnlerCallError
+	var hce *actor.HandlerCallError
 	if !errors.As(err, &hce) {
-		t.Errorf("expected HadnlerCallError, got %T: %v", err, err)
+		t.Errorf("expected HandlerCallError, got %T: %v", err, err)
 	}
 
 	// Actor 应仍存活（panic 仅影响单次调用）

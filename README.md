@@ -4,61 +4,74 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lcy03406/actor-go)](https://goreportcard.com/report/github.com/lcy03406/actor-go)
 
-**actor-go** is a type-safe Actor Model framework for Go, with built-in RPC, distributed clustering, and persistent grain lifecycle management.
+**actor-go** is a type-safe Actor Model framework for Go, featuring built-in RPC, distributed clustering, and persistent grain lifecycle management.
 
-> 基于 Go 泛型的 Actor 模型框架，提供 RPC 远程调用、集群支持和持久化 Grain 生命周期管理。
+> 基于 Go 泛型的类型安全 Actor 模型框架，提供 RPC 远程调用、分布式集群和持久化 Grain 生命周期管理。
 
-## 项目结构
+## Quick Start
+
+```bash
+# Install
+go get github.com/lcy03406/actor-go
+
+# Run examples
+go run ./cmd/example/        # local Actor
+go run ./cmd/rpc_example/    # RPC over WebSocket
+go run ./cmd/grain_example/  # persistent Grain
+
+# Run tests
+go test ./...
+```
+
+## Project Structure
 
 ```
 actor-go/
-├── go.mod
-├── actor/                  # Actor 核心包
-│   ├── types.go            # ActorId + Request 接口
-│   ├── actor.go            # Actor[A,S] + RegistryBuilder[A,S]
-│   ├── actor_context.go    # ActorContext — handler 上下文
-│   ├── group.go            # Group[A,S] 管理同类型 Actor
-│   ├── manager.go          # Manager 多 Group 集合 + 泛型操作函数
-│   ├── handler.go          # 消息处理器注册与分发
-│   ├── invoke.go           # 泛型 Post/Call/Broadcast/Multicast
-│   ├── registry_builder.go # RegistryBuilder 注册阶段
-│   ├── timer.go            # Timer 可取消定时器
-│   ├── close.go            # 优雅关闭（drain + in-flight 保护）
-│   └── errors.go           # 错误类型
-├── rpc/                    # RPC 远程通信包
-│   ├── types.go            # Message/Codec/Transport 接口
-│   ├── server.go           # WebSocket RPC 服务端
-│   ├── client.go           # WebSocket RPC 客户端
-│   ├── entry.go            # 泛型 Post/Call/Broadcast/Multicast 入口
-│   ├── json.go             # JSON Codec 实现
-│   └── registry.go         # RPC 请求注册表
-├── grain/                  # Grain 持久化 Actor
-│   ├── grain.go            # Grain 接口定义
-│   ├── lifecycle.go        # 生命周期 + 租约管理
-│   ├── manager.go          # GrainManager
-│   ├── snapshot.go         # 快照持久化
-│   ├── driver_json.go      # JSON 文件驱动
-│   ├── driver_yaml.go      # YAML 文件驱动
-│   ├── driver_redis.go     # Redis 驱动
-│   └── driver_mongo.go     # MongoDB 驱动
-├── cluster/                # 集群支持
-│   ├── cluster.go          # Cluster 入口
-│   ├── node.go             # 节点管理
-│   ├── membership.go       # 成员发现
-│   ├── placement.go        # Actor 放置策略
-│   ├── route.go            # 路由
-│   └── transport.go        # 节点间通信
-├── lease/                  # 分布式租约
-│   ├── lease.go            # Lease 接口
-│   ├── local_lease.go      # 本地租约（单机）
-│   ├── redis_lease.go      # Redis 租约
-│   ├── mongo_lease.go      # MongoDB 租约
-│   ├── sql_lease.go        # SQL 租约
-│   └── retry.go            # 重试策略
-├── example/
-│   └── main.go             # 本地 Actor 示例
-├── rpc_example/
-│   └── main.go             # RPC 远程调用示例
+├── cmd/
+│   ├── example/              # local Actor example
+│   ├── rpc_example/          # RPC example
+│   └── grain_example/        # persistent Grain example
+├── actor/                    # Actor core
+│   ├── types.go              # ActorId, Request interfaces
+│   ├── actor.go              # actorRuntime — single-threaded event loop
+│   ├── actor_context.go      # ActorContext — handler context
+│   ├── group.go              # Group[A,S] — typed Actor pool
+│   ├── manager.go            # Manager — multi-Group container
+│   ├── handler.go            # handler dispatch
+│   ├── invoke.go             # Post/Call/Broadcast/Multicast
+│   ├── registry_builder.go   # RegisterSpawn / RegisterQuery / RegisterServe
+│   ├── timer.go              # cancellable Timer
+│   ├── close.go              # graceful close (drain + in-flight)
+│   └── errors.go             # error types
+├── rpc/                      # RPC over WebSocket
+│   ├── types.go              # Message, Codec, Transport interfaces
+│   ├── server.go             # WebSocket server
+│   ├── client.go             # WebSocket client
+│   ├── entry.go              # Post/Call/Broadcast/Multicast adapters
+│   ├── json.go               # JSON codec + transport
+│   └── registry.go           # RPC request registry
+├── grain/                    # persistent Grain Actor
+│   ├── lifecycle.go          # activate (lease + load), WrapSpawn
+│   ├── manager.go            # PersistenceManager
+│   ├── snapshot.go           # Snapshotter interface + ShotSelf
+│   ├── driver_json.go        # JSON file driver
+│   ├── driver_yaml.go        # YAML file driver
+│   ├── driver_redis.go       # Redis driver
+│   └── driver_mongo.go       # MongoDB driver
+├── cluster/                  # distributed clustering
+│   ├── cluster.go            # Cluster entry
+│   ├── node.go               # node management
+│   ├── membership.go         # member discovery
+│   ├── placement.go          # Actor placement
+│   ├── route.go              # routing
+│   └── transport.go          # node-to-node transport
+├── lease/                    # distributed lease
+│   ├── lease.go              # Lease interface
+│   ├── local_lease.go        # local (single-node)
+│   ├── redis_lease.go        # Redis lease
+│   ├── mongo_lease.go        # MongoDB lease
+│   ├── sql_lease.go          # SQL lease
+│   └── retry.go              # retry strategies
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── CHANGELOG.md
@@ -66,303 +79,373 @@ actor-go/
 └── SECURITY.md
 ```
 
-## 快速开始
-
-```bash
-# 安装
-go get github.com/lcy03406/actor-go
-
-# 运行本地示例
-cd actor-go
-go run ./example/
-
-# 运行 RPC 示例
-go run ./rpc_example/
-
-# 运行测试
-go test ./...
-```
-
-## Kotlin → Go 核心概念对照
-
-| Kotlin | Go | 说明 |
-|--------|-----|------|
-| `ActorIdBase` | `ActorId` 接口 | `ActorType() string` + `String() string` |
-| `ActorStateBase<Id>` | 泛型 `S` | `Serve` 注册时绑定，handler 拿具体类型 |
-| `ActorRequest<Id, Reply>` | `Request[A, R]` 接口 | `ReqType(A, *R) string` 实现编译期类型检查 |
-| `ActorReply` | 无 | Go 不需要，类型由注册表确定 |
-| `Actor<Id, State>` | `Actor[A, S]` | `State()` 返回 `*S`，无需类型断言 |
-| `ActorGroup` | `Group[A, S]` | 薄封装 `rawGroup` |
-| `ActorManager` (object) | `Manager` | 显式实例化，容纳多个 Group |
-| `ActorRegistryBuilder` | `RegistryBuilder[A, S]` | 注册阶段与运行阶段分离 |
-| `CompletableDeferred` | `chan callResult` | 单通道结构体 |
-| `ActorTimer` | `Actor.Timer()` | `time.AfterFunc`，返回可取消的 `*time.Timer` |
-| `RpcServer` | `Server` | gorilla/websocket + `Start()`/`Run()`/`Shutdown()` |
-| `RpcClient` | `Client[A, S]` | `context` 超时 + `done` 通道通知断线 |
-
-## 架构设计
-
-### Manager 是多个 Group 的集合
+## Architecture
 
 ```
-                    ┌───────────────────────┐
-                    │       Manager         │
-                    │  (无类型参数)           │
-                    └──────────┬────────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-    ┌─────────▼──────┐  ┌──────▼───────┐  ┌─────▼──────────┐
-    │ Group[A1, S1]  │  │ Group[A2,S2] │  │ Group[A3, S3]   │
-    │ (ActorId,State)│  │              │  │                 │
-    └────────────────┘  └──────────────┘  └─────────────────┘
+                     ┌───────────────────────┐
+                     │       Manager         │
+                     │  (non-generic)        │
+                     └──────────┬────────────┘
+                                │
+               ┌────────────────┼────────────────┐
+               │                │                │
+     ┌─────────▼──────┐  ┌──────▼───────┐  ┌─────▼──────────┐
+     │ Group[A1, S1]  │  │ Group[A2,S2] │  │ Group[A3, S3]  │
+     │ (ActorId,State)│  │              │  │                │
+     └────────────────┘  └──────────────┘  └────────────────┘
 ```
 
-- 一个 `Manager` 可容纳多个 `Group`，每个 Group 对应独立的 `(ActorId, State)` 类型对
-- 泛型操作通过包级函数实现（Go 方法不支持独立类型参数）
-- `A` 类型由 `Request[A, R]` 约束自动推导，`S` 类型由 `Serve` 注册时推导
+- A **Manager** holds multiple **Groups**, each for a distinct `(ActorId, State)` type pair.
+- Each **Actor** runs in its own goroutine with a serialized mailbox — no locks needed.
+- Generic operations are package-level functions (Go methods cannot have independent type parameters).
+- `A` is inferred from `Request[A, R]`; `S` is inferred from `Serve` registration.
 
-### 类型安全
+### Type Safety
 
-- **Request[A, R]**：`ReqType(A, *R) string` 方法签名确保 Q 与 A、R 匹配
-- **Post 约束为 `Request[A, OkReply]`**：handler 返回非 OkReply 的请求不能 Post，必须 Call
-- **跨 Group 类型隔离**：不同 Group 的请求类型无法互相发送，编译器会拒绝
-
-### 编译期能检查的错误
+- **`Request[A, R]`**: `ReqType(A, *R) string` ensures compile-time `A`/`Q`/`R` match.
+- **Post constraint**: only `Request[A, OkReply]` can be used with `Post`; requests with custom replies must use `Call`.
+- **Cross-Group isolation**: requests for one Group cannot be sent to another — the compiler rejects it.
 
 ```go
-// 错误：TestAdd 返回 TestAddReply，不能 Post（编译失败）
-actor.Post(mgr, testId, &TestAdd{Add: 10})
-// → *TestAdd does not implement Request[TestActorId, OkReply]
+// Compile error: Attack returns *AttackReply, cannot Post
+actor.Post(mgr, id, &Attack{Damage: 10})
+// → *Attack does not implement Request[PlayerId, OkReply]
 
-// 正确：必须用 Call 获取返回值
-var reply TestAddReply
-actor.Call(ctx, mgr, testId, &TestAdd{Add: 10}, &reply)
+// Correct: use Call to get the reply
+reply, err := actor.Call(ctx, mgr, id, &Attack{Damage: 10})
 ```
 
-## 核心 API
+## Core API
 
-### 包名冲突处理
-
-Go 惯例：当 `actor` 包名与变量名冲突时，使用 import 别名：
-
-```go
-import act "github.com/lcy03406/actor-go/actor"
-
-mgr := act.NewManager()
-act.Serve(mgr, 100, func(b *act.RegistryBuilder[MyId, MyState]) { ... })
-```
-
-### 1. 定义类型
+### 1. Define Types
 
 ```go
 import "github.com/lcy03406/actor-go/actor"
 
 // Actor ID
-type MyActorId struct {
+type PlayerId struct {
     ServerId int    `json:"serverId"`
     OpenId   string `json:"openId"`
 }
-func (id MyActorId) ActorType() string { return "MyActor" }
-func (id MyActorId) String() string    { return fmt.Sprintf("%d:%s", id.ServerId, id.OpenId) }
+func (id PlayerId) ActorType() actor.ActorType { return "Player" }
+func (id PlayerId) String() string {
+    return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId)
+}
 
 // State
-type MyState struct {
-    Data int
+type PlayerState struct {
+    HP    int `json:"hp"`
+    Level int `json:"level"`
 }
 
-// 回复
-type MyReply struct {
-    Result int `json:"result"`
+// Reply
+type AttackReply struct {
+    RemainingHP int  `json:"remainingHP"`
+    Alive       bool `json:"alive"`
 }
 
-// 请求：实现 actor.Request[MyActorId, R] 接口
-// ReqType 的参数类型确保编译期 Q/A/R 三方匹配
-type MyLogin struct {
-    InitData int `json:"initData"`
+// Requests — implement Request[A, R]
+type Login struct {
+    InitHP    int `json:"initHP"`
+    InitLevel int `json:"initLevel"`
 }
-func (*MyLogin) ReqType(_ MyActorId, _ *actor.OkReply) string { return "MyLogin" }
+func (*Login) ReqType(_ PlayerId, _ actor.OkReply) string { return "Login" }
 
-type MyReq struct {
-    Value int `json:"value"`
+type Attack struct {
+    Damage int `json:"damage"`
 }
-func (*MyReq) ReqType(_ MyActorId, _ *MyReply) string { return "MyReq" }
+func (*Attack) ReqType(_ PlayerId, _ *AttackReply) string { return "Attack" }
 
-type MyClose struct{}
-func (*MyClose) ReqType(_ MyActorId, _ *actor.OkReply) string { return "MyClose" }
+type Close struct{}
+func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 ```
 
-### 2. 注册处理器
+### 2. Register Handlers
 
 ```go
 mgr := actor.NewManager()
 
-// 注册 Group1：MyActorId + MyState
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[MyActorId, MyState]) {
-    // spawn: 首次消息创建 Actor，不等待回复
-    actor.RegisterSpawn(b,
-        func(a *actor.Actor[MyActorId, MyState], req *MyLogin, spawning bool) (actor.OkReply, error) {
-            a.SetState(&MyState{Data: req.InitData})
-            return actor.OkReply{}, nil
-        })
+actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+    // RegisterSpawn: first message creates the Actor (fire-and-forget)
+    actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+        ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
+        return actor.OK, nil
+    })
 
-    // request: 需要回复，handler 拿到具体类型 State
-    actor.RegisterRequest(b,
-        func(a *actor.Actor[MyActorId, MyState], req *MyReq) (MyReply, error) {
-            a.State().Data += req.Value  // 无需类型断言
-            return MyReply{Result: a.State().Data}, nil
-        })
+    // RegisterQuery: query an existing Actor (returns reply)
+    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
+        ctx.State().HP -= req.Damage
+        alive := ctx.State().HP > 0
+        return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
+    })
 
-    // requestSpawn: 需要回复 + 首次消息创建 Actor
-    actor.RegisterRequestSpawn(b,
-        func(a *actor.Actor[MyActorId, MyState], req *MyLogin, spawning bool) (MyReply, error) {
-            a.SetState(&MyState{Data: req.InitData})
-            return MyReply{Result: a.State().Data}, nil
-        })
-
-    // post: fire-and-forget（RegisterPost 需要手动指定 reqType 字符串）
-    actor.RegisterPost(b, "MyNotify",
-        func(a *actor.Actor[MyActorId, MyState], req *MyNotify) (actor.OkReply, error) {
-            a.Logger().Info("notified", "msg", req.Msg)
-            return actor.OkReply{}, nil
-        })
-})
-
-// 注册 Group2：AnotherId + AnotherState（同一 Manager 中）
-actor.Serve(mgr, 50, func(b *actor.RegistryBuilder[AnotherId, AnotherState]) {
-    // ...
+    // RegisterServe: first message creates the Actor AND returns reply
+    actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, spawning bool) (*AttackReply, error) {
+        if spawning {
+            ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
+        }
+        return &AttackReply{RemainingHP: ctx.State().HP, Alive: ctx.State().HP > 0}, nil
+    })
 })
 ```
 
-### 3. 发送消息
+| Register | Spawn (create) | Query (existing) | Reply |
+|----------|:---:|:---:|:---:|
+| `RegisterSpawn` | yes | no | `OkReply` |
+| `RegisterQuery` | no | yes | custom |
+| `RegisterServe` | yes | yes | custom |
+
+### 3. Send Messages
 
 ```go
 ctx := context.Background()
 
-// Post: fire-and-forget，A 由 Request 推导
-actor.Post(mgr, actorId, &MyLogin{InitData: 42})
+// Post: fire-and-forget (spawns if needed)
+actor.Post(mgr, playerId, &Login{InitHP: 100, InitLevel: 1})
 
-// Call: 结果写入 reply 指针，Go 从 &reply 推导 R 类型
-var reply MyReply
-if err := actor.Call(ctx, mgr, actorId, &MyReq{Value: 10}, &reply); err != nil {
+// Call: returns reply directly
+reply, err := actor.Call(ctx, mgr, playerId, &Attack{Damage: 30})
+if err != nil {
     // handle error
 }
-fmt.Println(reply.Result) // 直接使用，无需类型断言
+fmt.Println(reply.RemainingHP) // 70
 
-// 带超时
+// Call with timeout
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-var reply2 MyReply
-actor.Call(ctx, mgr, actorId, &MyReq{Value: 10}, &reply2)
+reply, err = actor.Call(ctx, mgr, playerId, &Attack{Damage: 10})
 
-// Broadcast: 广播 fire-and-forget 消息
-actor.Broadcast(mgr, &MyClose{})
+// Broadcast: send to all Actors in the Group
+count, _ := actor.Broadcast(mgr, &Close{})
 
-// Multicast: 多播到指定 Actor
-actor.Multicast(mgr, []MyActorId{id1, id2}, &MyClose{})
+// Multicast: send to specific Actors
+hit, _ := actor.Multicast(mgr, []PlayerId{id1, id2}, &Close{})
 
-// Count: 查询指定 Group 的 Actor 数量（A 需显式指定）
-actor.Count[MyActorId](mgr)
+// Count: number of active Actors in a Group
+n, _ := actor.Count[PlayerId](mgr)
 
-// Finalize: 优雅关闭指定 Group
-actor.Finalize(mgr, &MyClose{})
+// Finalize: close all Actors in a Group and wait
+actor.Finalize(mgr, &Close{})
 ```
 
-### 4. Actor 内部方法
+### 4. ActorContext Methods
 
 ```go
-actor.RegisterRequest(b,
-    func(a *actor.Actor[MyActorId, MyState], req *MyReq) (MyReply, error) {
-        a.State()       // *MyState，无需类型断言
-        a.SetState(...) // 设置新状态
-        a.Id()          // 当前 ActorId
-        a.Logger()      // *slog.Logger
-        a.Post(&MyNotify{Msg: "done"})  // 向自身发送消息
-        a.Close()       // 关闭自身（排空 mailbox 后退出）
-        a.AtClose(func() { ... })        // 注册关闭回调
-        timer := a.Timer(5*time.Second, func() { ... }) // 延迟回调
-        timer.Stop()    // 取消未执行的定时器
-        return MyReply{}, nil
-    })
+actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
+    ctx.State()           // *PlayerState — no type assertion needed
+    ctx.SetState(...)     // replace state
+    ctx.Id()              // current ActorId
+    ctx.Logger()          // *slog.Logger
+    ctx.Context()         // context.Context (cancelled on Actor exit)
+    ctx.Quit()            // request exit (drain mailbox first)
+    ctx.Timer(d, fn)      // schedule delayed callback, returns timer ID
+    ctx.StopTimer(id)     // cancel a scheduled timer
+    return &AttackReply{}, nil
+})
 ```
 
-## RPC 远程调用
-
-### 服务端
+### 5. Manager Lifecycle
 
 ```go
-codec := rpc.NewJSONCodec()
-codec.RegisterActorId("MyActor", func() actor.ActorId { return &MyActorId{} })
-codec.RegisterRequest("MyReq", func() any { return &MyReq{} })
-codec.RegisterReply("MyReply", func() any { return &MyReply{} })
+mgr := actor.NewManager()
 
-server := rpc.NewServer(":8080", mgr.Raw(), codec)
-server.Start() // 非阻塞
+// Graceful shutdown: stop accepting new messages, wait for all Actors to exit
+mgr.CloseManager()
+mgr.JoinManager()
 
-// 或阻塞运行
-// server.Run()
+// Check if Manager is already closed
+if mgr.IsClosed() {
+    // ...
+}
 
-// 优雅关闭
+// Per-Actor lifecycle
+actor.CloseActor[PlayerId](mgr, id)   // gentle close: drain mailbox, finish in-flight
+actor.KillActor[PlayerId](mgr, id)    // force close: cancel ctx, drop pending
+actor.JoinActor[PlayerId](mgr, id)    // wait for Actor's goroutine to exit
+```
+
+## RPC
+
+Remote Actor communication over WebSocket with JSON codec.
+
+### Server
+
+```go
+mgr := actor.NewManager()
+// ... register handlers ...
+
+server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
+    ":8080", mgr,
+    func(b *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec]) {
+        rpc.RegisterRequest(b, &Login{})
+        rpc.RegisterRequest(b, &Attack{})
+        rpc.RegisterRequest(b, &Close{})
+    },
+)
+server.Start() // non-blocking
+// server.Run() // blocking
+
+// graceful shutdown
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 server.Shutdown(ctx)
 ```
 
-### 客户端
+### Client
 
 ```go
-codec := rpc.NewJSONCodec()
-codec.RegisterActorId("MyActor", func() actor.ActorId { return &MyActorId{} })
-codec.RegisterRequest("MyReq", func() any { return &MyReq{} })
-codec.RegisterReply("MyReply", func() any { return &MyReply{} })
-
-client := rpc.NewClient[MyActorId, MyState]("localhost:8080", codec)
+client := rpc.NewClient[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport]("localhost:8080")
 client.Connect()
+defer client.Close()
 
-// 远程 Post（fire-and-forget）
-client.Post(actorId, &MyNotify{Msg: "hello"})
+// Remote Post (fire-and-forget)
+rpc.Post(client, playerId, &Login{InitHP: 100, InitLevel: 1})
 
-// 远程 Call：结果写入 reply 指针
-var reply MyReply
-if err := rpc.Call(ctx, client, actorId, &MyReq{Value: 10}, &reply); err != nil {
-    // handle error
-}
+// Remote Call
+reply, err := rpc.Call(ctx, client, playerId, &Attack{Damage: 30})
 
-// 远程 Call 快捷超时
-var reply2 MyReply
-rpc.CallTimeout(client, actorId, &MyReq{Value: 10}, &reply2, 5*time.Second)
+// Remote Call with timeout
+reply, err = rpc.CallTimeout(ctx, client, playerId, &Attack{Damage: 10}, 5*time.Second)
 
-// 关闭（通知所有 pending call）
-client.Close()
+// Remote Broadcast
+rpc.Broadcast(client, &Close{})
 ```
 
-### RPC 消息格式
+### Wire Format
 
 ```json
-// 请求
-{"id": "1", "method": "call", "actorType": "MyActor",
- "actorId": {"serverId": 1, "openId": "player_1"},
- "reqType": "MyReq", "req": {"value": 10}}
+// Request
+{"seq": 1, "method": "call", "actorType": "Player",
+ "reqType": "Attack", "actorId": {"serverId": 1, "openId": "alice"},
+ "req": {"damage": 30}}
 
-// 响应（replyType 用于客户端解码）
-{"id": "1", "replyType": "MyReply", "reply": {"result": 20}}
+// Response
+{"seq": 1, "reply": {"remainingHP": 70, "alive": true}}
 ```
 
-## 设计要点
+## Grain — Persistent Actor
 
-| 特性 | 说明 |
-|------|------|
-| 单线程 Actor | 每个 Actor 独立 goroutine，channel 串行处理，无需加锁 |
-| 多 Group | 一个 `Manager` 容纳多个 `(ActorId, State)` 类型对，独立计数、独立操作 |
-| 类型安全 | `Request[A, R]` 绑定 Id/Reply，编译期检查跨 Group 类型错误 |
-| Post 约束 | 只接受 `Request[A, OkReply]`，有返回值的请求必须用 Call |
-| spawn 模式 | 首次消息触发 Actor 创建，适合 Login |
-| request 模式 | `Call` 阻塞等待回复，`Post` 是 fire-and-forget |
-| drain 排空 | 关闭 mailbox 后 `for range` 自动排空缓冲消息，不丢消息 |
-| context 超时 | `Call(ctx, ...)` 支持超时和取消 |
-| 可取消 Timer | `Actor.Timer()` 返回 `*time.Timer`，可 `Stop()` |
-| Manager 显式实例 | `NewManager()` 创建，无隐式全局状态 |
-| 包名冲突 | 用 import 别名，如 `import act "github.com/lcy03406/actor-go/actor"` |
-| Codec 接口 | 便于测试 mock 和替换序列化实现 |
-| 优雅关闭 | `Server.Shutdown(ctx)` 等待现有请求完成 |
-| 断线通知 | `Client.Close()` 通过 `done` 通道通知所有 pending call |
+Grain adds **lease-managed persistence** to Actors. Each Grain Actor is automatically activated on first message: acquire a distributed lease, load persisted state from storage, and start periodic lease renewal. On deactivation, state is saved and the lease is released.
+
+### Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **PersistenceManager** | Manages driver + lease manager + renewal settings |
+| **Driver** | Loads/saves snapshots (JSON, YAML, Redis, MongoDB) |
+| **Lease** | Distributed lock ensuring single-ownership across nodes |
+| **Snapshotter** | Converts business data to/from persistable snapshots |
+| **WrapSpawn** | Wraps spawn handler to auto-activate on first message |
+
+### Quick Example
+
+```go
+import (
+    "github.com/lcy03406/actor-go/actor"
+    "github.com/lcy03406/actor-go/grain"
+    "github.com/lcy03406/actor-go/lease"
+)
+
+// Use ShotSelf when business data is directly serializable
+type PlayerData struct {
+    HP    int `json:"hp"`
+    Level int `json:"level"`
+}
+
+// State type alias for readability
+type GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
+
+// Create PersistenceManager
+pm := grain.NewPersistenceManager(
+    grain.WithDriver(grain.NewJsonDriver("./data")),
+    grain.WithLeaseManager(lease.NewLocalManager(30*time.Second)),
+    grain.WithNodeId("node-1"),
+    grain.WithRenewInterval(30*time.Second),
+)
+
+// Register with WrapSpawn
+actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
+    actor.RegisterSpawn(b, grain.WrapSpawn(pm,
+        func(ctx *actor.ActorContext[PlayerId, GrainState], req *Login, _ bool) (actor.OkReply, error) {
+            ctx.State().Data.HP = req.InitHP
+            ctx.State().Data.Level = req.InitLevel
+            ctx.State().Persist(ctx)  // save immediately
+            return actor.OK, nil
+        }))
+
+    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Attack, _ bool) (*AttackReply, error) {
+        ctx.State().Data.HP -= req.Damage
+        alive := ctx.State().Data.HP > 0
+        return &AttackReply{RemainingHP: ctx.State().Data.HP, Alive: alive}, nil
+    })
+
+    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *SaveAndQuit, _ bool) (actor.OkReply, error) {
+        ctx.State().Deactivate(ctx)  // save + release lease + quit
+        return actor.OK, nil
+    })
+})
+```
+
+### Grain State Methods
+
+```go
+state := ctx.State()
+state.Data           // your business data (D)
+state.Persist(ctx)   // save now, keep running
+state.Deactivate(ctx)  // save + release lease + quit
+state.RenewLease(ctx)  // manual lease renewal (auto if RenewInterval > 0)
+```
+
+### Lifecycle
+
+```
+  first message arrives
+        │
+        ▼
+  acquire lease ──fail──▶ error (another node owns it)
+        │
+        ▼
+  load snapshot from driver
+  (zero-value if not found)
+        │
+        ▼
+  ┌─── handler runs ──────────────────┐
+  │  • Persist() — save without quit  │
+  │  • Deactivate() — save + quit     │
+  │  • auto-renew lease (if enabled)  │
+  └───────────────────────────────────┘
+        │
+        ▼  (Deactivate)
+  save snapshot → release lease → quit
+```
+
+## Cluster
+
+The `cluster` package provides distributed Actor placement across multiple nodes:
+
+- **Membership**: node discovery and health checks
+- **Placement**: decides which node owns each Actor
+- **Routing**: forwards messages to the owning node
+- **Transport**: node-to-node communication
+
+## Design Highlights
+
+| Feature | Description |
+|---------|-------------|
+| Single-threaded Actor | One goroutine per Actor, serialized channel processing, no locks |
+| Multi-Group | One Manager holds multiple `(ActorId, State)` type pairs |
+| Compile-time safety | `Request[A, R]` binds Id/Reply; cross-Group errors caught by compiler |
+| Post constraint | `Request[A, OkReply]` only; custom replies must use `Call` |
+| Auto-spawn | First message triggers Actor creation (RegisterSpawn / RegisterServe) |
+| Drain | Mailbox is drained before close; no messages lost |
+| Context timeout | `Call(ctx, ...)` supports timeout and cancellation |
+| Cancellable Timer | `ctx.Timer()` returns timer ID, `ctx.StopTimer(id)` cancels |
+| Explicit Manager | `NewManager()` creates independent instances, no global state |
+| Package name alias | Use `import act "github.com/lcy03406/actor-go/actor"` to avoid conflicts |
+| Codec interface | Easy to swap serialization; supports JSON, protobuf, etc. |
+| Graceful shutdown | `Server.Shutdown(ctx)` waits for in-flight requests |
+| Connection loss | `Client.Close()` notifies all pending calls via `done` channel |
+
+## License
+
+MIT — see [LICENSE](LICENSE).

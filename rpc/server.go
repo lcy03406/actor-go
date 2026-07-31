@@ -24,8 +24,8 @@ type Server[M Message, C Codec[M], T Transport[M]] struct {
 }
 
 // NewServer 创建一个新的 RPC Server。
-func NewServer[M Message, C Codec[M], T Transport[M]](addr string, mgr *actor.Manager, reg func(*RegustryBuilder[M, C])) *Server[M, C, T] {
-	b := &RegustryBuilder[M, C]{entryMap: make(map[registryKey]entry[M, C])}
+func NewServer[M Message, C Codec[M], T Transport[M]](addr string, mgr *actor.Manager, reg func(*RegistryBuilder[M, C])) *Server[M, C, T] {
+	b := &RegistryBuilder[M, C]{entryMap: make(map[registryKey]entry[M, C])}
 	reg(b)
 	return &Server[M, C, T]{
 		mgr:      mgr,

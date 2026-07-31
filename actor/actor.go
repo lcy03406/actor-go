@@ -136,7 +136,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			a.logger.Warn("handler invoke panic", "id", a.id, "panic", r, "stack", stackInfo)
 			err, _ := r.(error)
 			a.logger.Warn("handler invoke panic", "id", a.id, "panic", r)
-			buf[nx].Fail(&HadnlerCallError{a.id, "", err})
+			buf[nx].Fail(&HandlerCallError{a.id, "", err})
 			if nctx.idle {
 				a.g.actorIdle(a.id)
 				nctx.clear()

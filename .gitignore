@@ -21,3 +21,16 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Grain example data
+grain_data/
+
+# Profiling
+*.prof
+*.pprof
+
+# Coverage
+coverage.html
+
+# Temp
+tmp/

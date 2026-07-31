@@ -256,10 +256,6 @@ func TestCluster_Resolve(t *testing.T) {
 	c.Close()
 }
 
-func itoaTest(n int) string {
-	return itoa(n)
-}
-
 func TestItoa(t *testing.T) {
 	tests := []struct {
 		n    int

@@ -8,7 +8,7 @@ import (
 
 type JsonServer = Server[json.RawMessage, JsonCodec, JsonTransport]
 type JsonClient = Client[json.RawMessage, JsonCodec, JsonTransport]
-type JsonRegBuilder = RegustryBuilder[json.RawMessage, JsonCodec]
+type JsonRegBuilder = RegistryBuilder[json.RawMessage, JsonCodec]
 
 type JsonCodec struct{}
 
@@ -30,8 +30,7 @@ type jsonMessage struct {
 }
 
 type jsonResponse struct {
-	Seq uint64 `json:"seq"`
-	//ReplyType string          `json:"replyType,omitempty"`
+	Seq   uint64          `json:"seq"`
 	Reply json.RawMessage `json:"reply,omitempty"`
 	Error string          `json:"error,omitempty"`
 }

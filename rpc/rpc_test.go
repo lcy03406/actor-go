@@ -18,7 +18,7 @@ import (
 
 type testServer = rpc.Server[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport]
 type testClient = rpc.Client[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport]
-type testRegBuilder = rpc.RegustryBuilder[json.RawMessage, rpc.JsonCodec]
+type testRegBuilder = rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec]
 
 // ============================================================
 // 测试类型定义

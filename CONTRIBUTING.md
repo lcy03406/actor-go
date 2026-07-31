@@ -17,11 +17,16 @@ Thank you for your interest in contributing to actor-go!
 git clone https://github.com/lcy03406/actor-go.git
 cd actor-go
 
-# Ensure Go 1.23+ is installed
+# Ensure Go 1.26+ is installed
 go version
 
 # Run tests
 go test ./...
+
+# Run examples
+go run ./cmd/example/
+go run ./cmd/rpc_example/
+go run ./cmd/grain_example/
 
 # Run benchmarks
 go test -bench=. ./actor/...

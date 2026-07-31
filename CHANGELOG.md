@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-07-31
+## [0.1.0] - 2026-08-01
 
 ### Added
 
@@ -21,3 +21,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 编译期类型安全：Request[A, R] 接口确保跨 Group 类型错误在编译期暴露
 - Content 超时：Call 支持 context 超时和取消
 - 完善的测试覆盖：单元测试、并发测试、Benchmark 测试
+- 示例代码：cmd/example（本地 Actor）、cmd/rpc_example（RPC）、cmd/grain_example（持久化 Grain）

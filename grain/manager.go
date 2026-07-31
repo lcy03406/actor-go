@@ -13,7 +13,7 @@ import (
 //
 //	pm := grain.NewPersistenceManager(
 //	    grain.WithDriver(grain.NewJsonDriver("./data")),
-//	    grain.WithLeaseManager(lease.NewLocalManager()),
+//	    grain.WithLeaseManager(lease.NewLocalManager(30*time.Second)),
 //	    grain.WithNodeId("node-1"),
 //	    grain.WithRenewInterval(30*time.Second),
 //	)

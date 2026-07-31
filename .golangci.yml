@@ -1,0 +1,106 @@
+# golangci-lint v2 configuration
+# See: https://golangci-lint.run/docs/configuration/file/
+
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - err113
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - noctx
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+        - opinionated
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: increment-decrement
+        - name: var-naming
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+    staticcheck:
+      checks:
+        - all
+        - -SA1019  # allow use of deprecated things (e.g. for backwards compatibility)
+
+  exclusions:
+    generated: strict
+    rules:
+      # Exclude test files from some linters
+      - path: _test\.go
+        linters:
+          - err113
+          - gosec
+          - noctx
+          - funlen
+          - gocognit
+          - cyclop
+      # Exclude cmd/ examples from some linters
+      - path: cmd/
+        linters:
+          - err113
+          - gosec
+          - noctx
+      # Exclude some rules for specific patterns
+      - path: _test\.go
+        text: "unused-parameter"
+      - path: _test\.go
+        text: "exported"
+      - linters:
+          - revive
+        text: "should have comment"
+        path: _test\.go
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    generated: strict
