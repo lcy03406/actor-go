@@ -219,6 +219,31 @@ func (d *RedisDriver) Release(ctx context.Context, actorType string, id string, 
 	return nil
 }
 
+// ForceRelease 强制释放租约，不检查 owner 和 generation。
+func (d *RedisDriver) ForceRelease(ctx context.Context, actorType string, id string) (int64, error) {
+	key := d.key(actorType, id)
+	ttlMs := d.leaseTimeout.Milliseconds()
+
+	script := redis.NewScript(`
+		local key = KEYS[1]
+		local ttl_ms = tonumber(ARGV[1])
+
+		local cur_gen = tonumber(redis.call('HGET', key, 'generation') or '0')
+		local new_gen = cur_gen + 1
+		redis.call('HSET', key, 'owner', '', 'generation', new_gen)
+		if ttl_ms > 0 then
+			redis.call('PEXPIRE', key, ttl_ms)
+		end
+		return new_gen
+	`)
+
+	result, err := script.Run(ctx, d.client, []string{key}, ttlMs).Int64()
+	if err != nil {
+		return 0, err
+	}
+	return result, nil
+}
+
 func (d *RedisDriver) marshalData(src any) ([]byte, error) {
 	switch v := src.(type) {
 	case encoding.BinaryMarshaler:

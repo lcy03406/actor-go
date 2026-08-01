@@ -2,10 +2,13 @@ package cluster
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
 	"github.com/lcy03406/actor-go/actor"
+	"github.com/lcy03406/actor-go/grain"
 	"github.com/lcy03406/actor-go/rpc"
 )
 
@@ -58,34 +61,80 @@ func (c *Cluster) Close() error {
 // Dialer 是建立到目标节点的 rpc.Client 的函数类型。
 type Dialer[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]] func(addr string) *rpc.Client[M, C, T]
 
+// LeaseForceReleaser 是强制释放租约的接口。
+// PersistenceManager 通过 Driver 实现此接口。
+type LeaseForceReleaser interface {
+	ForceRelease(ctx context.Context, actorType string, id string) (int64, error)
+}
+
+// RouterConfig 是 Router 的租约重试配置，不依赖泛型参数。
+type RouterConfig struct {
+	LeaseRetry    bool
+	ForceReleaser LeaseForceReleaser
+}
+
+// RouterOption 是 Router 的配置选项（非泛型，直接用于 RouterConfig）。
+type RouterOption func(*RouterConfig)
+
+// WithLeaseRetry 启用租约失败自动重试。
+// 启用后，Call/Post 遇到 *grain.ErrLeaseTaken 时会先尝试转发到持有者节点。
+func WithLeaseRetry(enabled bool) RouterOption {
+	return func(c *RouterConfig) { c.LeaseRetry = enabled }
+}
+
+// WithForceReleaser 设置强制释放租约的接口。
+// 设置后，租约持有者不可达时自动强制释放租约后本地重试。
+// 通常传入 grain.PersistenceManager，它实现了 LeaseForceReleaser 接口。
+// 同时自动启用 LeaseRetry。
+func WithForceReleaser(releaser LeaseForceReleaser) RouterOption {
+	return func(c *RouterConfig) {
+		c.ForceReleaser = releaser
+		c.LeaseRetry = true
+	}
+}
+
 // Router 封装集群路由分发逻辑，M/C/T 与 rpc.Client 泛型参数对应。
-// 根据 Placement 结果自动决定本地处理（通过 actor.Manager）还是远程转发（通过 rpc.Client）。
+// 根据 Placement 结果自动决定本地处理还是远程转发。
 //
 // 用法：
 //
-//	router := cluster.NewRouter(cluster, mgr, func(addr string) *rpc.Client[...] {
-//	    return rpc.NewClient[...](addr)
-//	})
+//	// 基础用法（无租约重试）
+//	router := cluster.NewRouter(cluster, mgr, dialer)
 //
-//	reply, err := router.Call(ctx, playerId, &Login{...})
-//	router.Post(playerId, &SaveAndQuit{})
-//	router.Broadcast(&KickAll{})
-//	router.Multicast([]PlayerId{id1, id2}, &SyncState{...})
+//	// 带租约重试 + 强制释放
+//	router := cluster.NewRouter(cluster, mgr, dialer,
+//	    cluster.WithForceReleaser(pm),
+//	)
+//
+//	reply, err := cluster.Call(ctx, router, playerId, &Login{...})
+//	cluster.Post(router, playerId, &SaveAndQuit{})
+//	cluster.Broadcast(router, &KickAll{})
+//	cluster.Multicast(router, []PlayerId{id1, id2}, &SyncState{...})
 type Router[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]] struct {
 	cluster    *Cluster
 	mgr        *actor.Manager
 	dialer     Dialer[M, C, T]
 	clientPool *clientPool[M, C, T]
+	cfg        RouterConfig
 }
 
 // NewRouter 创建一个路由分发器。
-func NewRouter[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]](cluster *Cluster, mgr *actor.Manager, dialer Dialer[M, C, T]) *Router[M, C, T] {
-	return &Router[M, C, T]{
+func NewRouter[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]](
+	cluster *Cluster,
+	mgr *actor.Manager,
+	dialer Dialer[M, C, T],
+	opts ...RouterOption,
+) *Router[M, C, T] {
+	r := &Router[M, C, T]{
 		cluster:    cluster,
 		mgr:        mgr,
 		dialer:     dialer,
 		clientPool: newClientPool[M, C, T](),
 	}
+	for _, opt := range opts {
+		opt(&r.cfg)
+	}
+	return r
 }
 
 // Self 返回本地节点信息。
@@ -134,45 +183,42 @@ func (r *Router[M, C, T]) Close() error {
 
 // Post 向指定 Actor 发送 fire-and-forget 消息。
 // 自动根据 Place 结果选择本地执行还是远程转发。
+//
+// 当 Router 配置了租约重试选项时，遇到 *grain.ErrLeaseTaken 会：
+//  1. 尝试转发到租约持有者节点
+//  2. 若持有者不可达且有 ForceReleaser，强制释放租约后本地重试
 func Post[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	id A,
 	req Q,
 ) error {
-	preferred := r.cluster.Place(string(id.ActorType()), id.String())
-	if preferred.ID == r.cluster.Self().ID {
-		return actor.Post(r.mgr, id, req)
+	err := postOnce(r, id, req)
+	if err == nil {
+		return nil
 	}
-	client, err := r.clientPool.getOrDial(preferred, r.dialer)
-	if err != nil {
-		return err
-	}
-	return rpc.Post[M, C, T](client, id, req)
+	return handleLeasePost(r, id, req, err)
 }
 
 // Call 向指定 Actor 发送请求，等待回复。
 // 自动根据 Place 结果选择本地执行还是远程转发。
+//
+// 当 Router 配置了租约重试选项时，遇到 *grain.ErrLeaseTaken 会：
+//  1. 尝试转发到租约持有者节点
+//  2. 若持有者不可达且有 ForceReleaser，强制释放租约后本地重试
 func Call[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	ctx context.Context,
 	r *Router[M, C, T],
 	id A,
 	req Q,
 ) (R, error) {
-	preferred := r.cluster.Place(string(id.ActorType()), id.String())
-	if preferred.ID == r.cluster.Self().ID {
-		return actor.Call(ctx, r.mgr, id, req)
+	reply, err := callOnce(ctx, r, id, req)
+	if err == nil {
+		return reply, nil
 	}
-	client, err := r.clientPool.getOrDial(preferred, r.dialer)
-	if err != nil {
-		var zero R
-		return zero, err
-	}
-	return rpc.Call[M, C, T](ctx, client, id, req)
+	return handleLeaseCall(ctx, r, id, req, reply, err)
 }
 
 // Broadcast 向所有同类 Actor 广播消息。
-// 本地：通过 actor.Manager 广播本地 Actor；
-// 远程：向所有其他节点发送 Broadcast。
 func Broadcast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	req Q,
@@ -204,8 +250,6 @@ func Broadcast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 }
 
 // Multicast 向一组 Actor 发送消息。
-// 按 Place 结果将 Actor 按目标节点分组，本地部分通过 actor.Manager 发送，
-// 远程部分按节点聚合后通过 rpc.Multicast 发送。
 func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	ids []A,
@@ -265,13 +309,186 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 	return total, nil
 }
 
+// ─── 租约重试逻辑 ───
+
+// postOnce 执行单次 Post 路由。
+func postOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	r *Router[M, C, T],
+	id A,
+	req Q,
+) error {
+	preferred := r.cluster.Place(string(id.ActorType()), id.String())
+	if preferred.ID == r.cluster.Self().ID {
+		return actor.Post(r.mgr, id, req)
+	}
+	client, err := r.clientPool.getOrDial(preferred, r.dialer)
+	if err != nil {
+		return err
+	}
+	return rpc.Post[M, C, T](client, id, req)
+}
+
+// callOnce 执行单次 Call 路由。
+func callOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	ctx context.Context,
+	r *Router[M, C, T],
+	id A,
+	req Q,
+) (R, error) {
+	preferred := r.cluster.Place(string(id.ActorType()), id.String())
+	if preferred.ID == r.cluster.Self().ID {
+		return actor.Call(ctx, r.mgr, id, req)
+	}
+	client, err := r.clientPool.getOrDial(preferred, r.dialer)
+	if err != nil {
+		var zero R
+		return zero, err
+	}
+	return rpc.Call[M, C, T](ctx, client, id, req)
+}
+
+// handleLeasePost 处理 Post 的租约重试逻辑。
+func handleLeasePost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	r *Router[M, C, T],
+	id A,
+	req Q,
+	origErr error,
+) error {
+	if !r.cfg.LeaseRetry {
+		return origErr
+	}
+
+	taken := isLeaseTaken(origErr)
+	if taken == nil {
+		return origErr
+	}
+
+	// 尝试转发到租约持有者节点
+	if tryForwardPost(r, id, req, taken) == nil {
+		return nil
+	}
+
+	// 强制释放租约后本地重试
+	if r.cfg.ForceReleaser != nil {
+		actorType := string(id.ActorType())
+		if _, forceErr := r.cfg.ForceReleaser.ForceRelease(context.Background(), actorType, id.String()); forceErr != nil {
+			return fmt.Errorf("lease taken and force release failed: %w (original: %w)", forceErr, origErr)
+		}
+		return postOnce(r, id, req)
+	}
+
+	return origErr
+}
+
+// handleLeaseCall 处理 Call 的租约重试逻辑。
+func handleLeaseCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	ctx context.Context,
+	r *Router[M, C, T],
+	id A,
+	req Q,
+	zero R,
+	origErr error,
+) (R, error) {
+	if !r.cfg.LeaseRetry {
+		return zero, origErr
+	}
+
+	taken := isLeaseTaken(origErr)
+	if taken == nil {
+		return zero, origErr
+	}
+
+	// 尝试转发到租约持有者节点
+	if reply, ok := tryForwardCall(ctx, r, id, req, taken); ok {
+		return reply, nil
+	}
+
+	// 强制释放租约后本地重试
+	if r.cfg.ForceReleaser != nil {
+		actorType := string(id.ActorType())
+		if _, forceErr := r.cfg.ForceReleaser.ForceRelease(ctx, actorType, id.String()); forceErr != nil {
+			return zero, fmt.Errorf("lease taken and force release failed: %w (original: %w)", forceErr, origErr)
+		}
+		return callOnce(ctx, r, id, req)
+	}
+
+	return zero, origErr
+}
+
+// tryForwardPost 尝试将 Post 请求转发到租约持有者节点。
+func tryForwardPost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	r *Router[M, C, T],
+	id A,
+	req Q,
+	taken *grain.ErrLeaseTaken,
+) error {
+	if taken.Owner == "" || taken.Owner == r.cluster.Self().ID {
+		return fmt.Errorf("cannot forward to self")
+	}
+
+	ownerNode := r.cluster.Members().Lookup(taken.Owner)
+	if ownerNode == nil {
+		return fmt.Errorf("lease owner %s not in cluster", taken.Owner)
+	}
+
+	client, err := r.GetClient(*ownerNode)
+	if err != nil {
+		return err
+	}
+
+	if err := rpc.Post[M, C, T](client, id, req); err != nil {
+		r.RemoveClient(ownerNode.Addr)
+		return err
+	}
+	return nil
+}
+
+// tryForwardCall 尝试将 Call 请求转发到租约持有者节点。
+// 返回 (reply, ok)，ok=true 表示转发成功。
+func tryForwardCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	ctx context.Context,
+	r *Router[M, C, T],
+	id A,
+	req Q,
+	taken *grain.ErrLeaseTaken,
+) (R, bool) {
+	var zero R
+	if taken.Owner == "" || taken.Owner == r.cluster.Self().ID {
+		return zero, false
+	}
+
+	ownerNode := r.cluster.Members().Lookup(taken.Owner)
+	if ownerNode == nil {
+		return zero, false
+	}
+
+	client, err := r.GetClient(*ownerNode)
+	if err != nil {
+		return zero, false
+	}
+
+	reply, err := rpc.Call[M, C, T](ctx, client, id, req)
+	if err != nil {
+		r.RemoveClient(ownerNode.Addr)
+		return zero, false
+	}
+	return reply, true
+}
+
+// isLeaseTaken 判断错误是否为租约被占用错误。
+func isLeaseTaken(err error) *grain.ErrLeaseTaken {
+	var taken *grain.ErrLeaseTaken
+	if errors.As(err, &taken) {
+		return taken
+	}
+	return nil
+}
+
 // ─── ClientPool 连接池 ───
 
-// clientPool 管理到各远程节点的 rpc.Client 连接。
-// 懒加载，按需建立连接，线程安全。
 type clientPool[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]] struct {
 	mu      sync.Mutex
-	clients map[string]*rpc.Client[M, C, T] // addr -> client
+	clients map[string]*rpc.Client[M, C, T]
 }
 
 func newClientPool[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]]() *clientPool[M, C, T] {
@@ -308,7 +525,6 @@ func (p *clientPool[M, C, T]) getOrDial(target Node, dialer Dialer[M, C, T]) (*r
 	}
 
 	p.mu.Lock()
-	// 双重检查：可能另一个 goroutine 已经建立了连接
 	if existing, ok := p.clients[target.Addr]; ok {
 		p.mu.Unlock()
 		client.Close()
@@ -344,8 +560,8 @@ func (p *clientPool[M, C, T]) closeAll() {
 type RouteError struct {
 	ActorType string
 	ActorId   string
-	Owner     string // 偏好节点 ID
-	Reason    string // 失败原因
+	Owner     string
+	Reason    string
 }
 
 func (e *RouteError) Error() string {

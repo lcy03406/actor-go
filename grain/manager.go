@@ -1,5 +1,7 @@
 package grain
 
+import "context"
+
 // PersistenceManager 是 manager 级别的持久化管理器。
 // 每个 Manager 创建一个实例，所有 Grain 类型共享。
 //
@@ -41,4 +43,23 @@ func NewPersistenceManager(opts ...PersistenceManagerOption) *PersistenceManager
 		opt(pm)
 	}
 	return pm
+}
+
+// Driver 返回底层 Driver 实例。
+func (pm *PersistenceManager) Driver() Driver {
+	return pm.driver
+}
+
+// NodeId 返回节点 ID。
+func (pm *PersistenceManager) NodeId() string {
+	return pm.nodeId
+}
+
+// ForceRelease 强制释放租约，不检查 owner 和 generation。
+// 实现 cluster.LeaseForceReleaser 接口，供 LeaseAwareRouter 使用。
+func (pm *PersistenceManager) ForceRelease(ctx context.Context, actorType string, id string) (int64, error) {
+	if pm.driver == nil {
+		return 0, ErrNoDriver
+	}
+	return pm.driver.ForceRelease(ctx, actorType, id)
 }

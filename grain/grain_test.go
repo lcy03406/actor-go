@@ -803,3 +803,152 @@ func TestErrLeaseTaken_Error(t *testing.T) {
 		t.Error("ErrLeaseTaken.Error() should not be empty")
 	}
 }
+
+// ─── ForceRelease 测试 ───
+
+func TestJsonDriver_ForceRelease(t *testing.T) {
+	dir := t.TempDir()
+	d := NewJsonDriver(dir)
+
+	// 先保存数据，建立 generation
+	snapshot := &TestGrainSnapshot{Value: 42}
+	if err := d.Save(context.Background(), "test", "actor-fr", "node-1", snapshot, 1); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	// 强制释放租约
+	newGen, err := d.ForceRelease(context.Background(), "test", "actor-fr")
+	if err != nil {
+		t.Fatalf("ForceRelease failed: %v", err)
+	}
+	if newGen != 2 {
+		t.Errorf("ForceRelease: want newGen=2, got %d", newGen)
+	}
+
+	// 释放后其他节点可以重新 Load（JsonDriver.Load 会递增 generation）
+	var loaded TestGrainSnapshot
+	lease, err := d.Load(context.Background(), "test", "actor-fr", "node-2", &loaded)
+	if err != nil {
+		t.Fatalf("Load after ForceRelease failed: %v", err)
+	}
+	// JsonDriver.Load 读取文件 gen=2，返回 gen+1=3
+	if lease.Generation != 3 {
+		t.Errorf("Load after ForceRelease: want generation=3, got %d", lease.Generation)
+	}
+	if loaded.Value != 42 {
+		t.Errorf("Load after ForceRelease: data preserved, want 42, got %d", loaded.Value)
+	}
+}
+
+func TestJsonDriver_ForceRelease_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	d := NewJsonDriver(dir)
+
+	// 强制释放不存在的文件应返回 generation=1
+	newGen, err := d.ForceRelease(context.Background(), "test", "no-such")
+	if err != nil {
+		t.Fatalf("ForceRelease on not found: %v", err)
+	}
+	if newGen != 1 {
+		t.Errorf("ForceRelease on not found: want 1, got %d", newGen)
+	}
+}
+
+func TestYamlDriver_ForceRelease(t *testing.T) {
+	dir := t.TempDir()
+	d := NewYamlDriver(dir)
+
+	// 保存数据
+	snapshot := &TestGrainSnapshot{Value: 100}
+	if err := d.Save(context.Background(), "test", "yaml-fr", "node-1", snapshot, 1); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	// 强制释放
+	newGen, err := d.ForceRelease(context.Background(), "test", "yaml-fr")
+	if err != nil {
+		t.Fatalf("ForceRelease failed: %v", err)
+	}
+	if newGen != 2 {
+		t.Errorf("ForceRelease: want newGen=2, got %d", newGen)
+	}
+}
+
+func TestPersistenceManager_ForceRelease(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("node-1"),
+	)
+
+	// 先通过正常流程激活并保存数据
+	mgr := setupTestRegistry(t, pm)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "pm-fr-test"}
+	_, err := actor.Call(ctx, mgr, id, &TestSpawnReq{})
+	if err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	_, err = actor.Call(ctx, mgr, id, &TestMutateReq{Add: 50})
+	if err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	_, err = actor.Call(ctx, mgr, id, &TestDeactivateReq{})
+	if err != nil {
+		t.Fatalf("deactivate failed: %v", err)
+	}
+	actor.JoinActor[TestGrainId](mgr, id)
+
+	// 通过 PersistenceManager 强制释放
+	newGen, err := pm.ForceRelease(ctx, "test_grain", id.String())
+	if err != nil {
+		t.Fatalf("PersistenceManager.ForceRelease failed: %v", err)
+	}
+	if newGen <= 0 {
+		t.Errorf("ForceRelease: expected positive generation, got %d", newGen)
+	}
+
+	// 释放后其他节点可以重新激活
+	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
+	if err != nil {
+		t.Fatalf("reactivation after ForceRelease failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 50 {
+		t.Errorf("ForceRelease preserved data: want 50, got %d", q.Value)
+	}
+}
+
+func TestPersistenceManager_ForceRelease_NoDriver(t *testing.T) {
+	pm := NewPersistenceManager(
+		WithNodeId("node-1"),
+	)
+
+	_, err := pm.ForceRelease(context.Background(), "test", "id")
+	if err == nil {
+		t.Error("ForceRelease without driver should return error")
+	}
+	if !errors.Is(err, ErrNoDriver) {
+		t.Errorf("ForceRelease error: want ErrNoDriver, got %v", err)
+	}
+}
+
+func TestPersistenceManager_Driver_NodeId(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("test-node"),
+	)
+
+	if pm.Driver() == nil {
+		t.Error("Driver() should not be nil")
+	}
+	if pm.NodeId() != "test-node" {
+		t.Errorf("NodeId(): want test-node, got %s", pm.NodeId())
+	}
+}

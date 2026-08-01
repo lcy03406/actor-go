@@ -194,3 +194,29 @@ func (d *MongoDriver) Release(ctx context.Context, actorType string, id string, 
 	}
 	return nil
 }
+
+// ForceRelease 强制释放租约，不检查 owner 和 generation。
+func (d *MongoDriver) ForceRelease(ctx context.Context, actorType string, id string) (int64, error) {
+	col := d.col(actorType)
+	now := time.Now()
+
+	filter := bson.M{"_id": id}
+	update := bson.M{
+		"$set": bson.M{
+			"owner":      "",
+			"updated_at": now,
+		},
+		"$inc": bson.M{"generation": 1},
+	}
+
+	opts := options.FindOneAndUpdate().
+		SetReturnDocument(options.After).
+		SetUpsert(true)
+
+	var doc mongoDoc
+	err := col.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
+	if err != nil {
+		return 0, err
+	}
+	return doc.Generation, nil
+}

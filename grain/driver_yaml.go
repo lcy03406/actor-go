@@ -68,6 +68,50 @@ func (d *YamlDriver) Release(_ context.Context, actorType string, id string, _ s
 	return nil
 }
 
+func (d *YamlDriver) ForceRelease(_ context.Context, actorType string, id string) (int64, error) {
+	// 本地驱动：递增 generation 并写回文件，模拟租约强制释放，保留数据
+	path := d.filePath(actorType, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return 0, err
+	}
+
+	type fileDoc struct {
+		Generation int64 `yaml:"generation"`
+		Data       any   `yaml:"data"`
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 1, d.writeForceReleaseYaml(path, 1, nil)
+		}
+		return 0, err
+	}
+
+	var doc fileDoc
+	decodeErr := yaml.NewDecoder(f).Decode(&doc)
+	_ = f.Close()
+	if decodeErr != nil {
+		return 0, decodeErr
+	}
+
+	newGen := doc.Generation + 1
+	return newGen, d.writeForceReleaseYaml(path, newGen, doc.Data)
+}
+
+func (d *YamlDriver) writeForceReleaseYaml(path string, gen int64, data any) error {
+	type doc struct {
+		Generation int64 `yaml:"generation"`
+		Data       any   `yaml:"data"`
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	return yaml.NewEncoder(f).Encode(doc{Generation: gen, Data: data})
+}
+
 func (d *YamlDriver) filePath(actorType string, id string) string {
 	return filepath.Join(d.dir, actorType, id+".yaml")
 }

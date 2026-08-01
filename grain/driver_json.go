@@ -57,6 +57,11 @@ type Driver interface {
 	// Release 释放租约（清空 owner），不删除数据。
 	// gen 和 owner 匹配时才释放。
 	Release(ctx context.Context, actorType string, id string, owner string, gen int64) error
+
+	// ForceRelease 强制释放租约，不检查 owner 和 generation。
+	// 用于租约持有者不可达时的强制接管，不删除数据。
+	// 成功释放后返回新的 generation，调用方可直接以新 generation 抢占。
+	ForceRelease(ctx context.Context, actorType string, id string) (newGeneration int64, err error)
 }
 
 // ErrNotFound 表示数据不存在，Load 返回此错误时框架使用零值初始化。
@@ -132,6 +137,52 @@ func (d *JsonDriver) Release(_ context.Context, actorType string, id string, _ s
 	// 本地驱动 Release 不删除文件，保持数据持久化
 	_ = path
 	return nil
+}
+
+func (d *JsonDriver) ForceRelease(_ context.Context, actorType string, id string) (int64, error) {
+	// 本地驱动：递增 generation 并写回文件，模拟租约强制释放，保留数据
+	path := d.filePath(actorType, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return 0, err
+	}
+
+	type fileDoc struct {
+		Generation int64           `json:"generation"`
+		Data       json.RawMessage `json:"data"`
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 1, d.writeForceReleaseDoc(path, 1, nil)
+		}
+		return 0, err
+	}
+
+	var doc fileDoc
+	decodeErr := json.NewDecoder(f).Decode(&doc)
+	_ = f.Close()
+	if decodeErr != nil {
+		return 0, decodeErr
+	}
+
+	newGen := doc.Generation + 1
+	return newGen, d.writeForceReleaseDoc(path, newGen, doc.Data)
+}
+
+func (d *JsonDriver) writeForceReleaseDoc(path string, gen int64, data json.RawMessage) error {
+	type doc struct {
+		Generation int64           `json:"generation"`
+		Data       json.RawMessage `json:"data"`
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	return enc.Encode(doc{Generation: gen, Data: data})
 }
 
 func (d *JsonDriver) filePath(actorType string, id string) string {
