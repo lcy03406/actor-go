@@ -4,19 +4,59 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
-// Driver 是持久化驱动接口，负责数据的实际存取。
-// 框架通过 actorType + id 定位数据，src/dst 是 *S（快照指针）。
-type Driver interface {
-	// Load 加载快照。若数据不存在，返回 nil（首次激活使用零值 D）。
-	Load(ctx context.Context, actorType string, id string, dst any) error
+// DefaultLeaseTimeout 默认租约超时时间。
+const DefaultLeaseTimeout = 10 * time.Minute
 
-	// Save 保存快照。gen 是 fencing token（monotonically increasing generation）。
-	// 实现应使用 gen 防止过期写入：仅当存储中的 generation <= gen 时才写入。
-	Save(ctx context.Context, actorType string, id string, src any, gen int64) error
+// LeaseInfo 是 Load 返回的租约信息。
+// 激活时 Load 同时完成 Acquire，Load 成功意味着租约已获取。
+type LeaseInfo struct {
+	Key        string
+	Owner      string
+	Generation int64
+}
+
+// ErrLeaseTaken 表示租约已被其他节点持有。
+// 调用方可通过字段判断是否转发请求、探测持有者或强制释放。
+type ErrLeaseTaken struct {
+	Key        string
+	Owner      string
+	Generation int64
+}
+
+func (e *ErrLeaseTaken) Error() string {
+	return fmt.Sprintf("grain: lease %s taken by %s (generation=%d)", e.Key, e.Owner, e.Generation)
+}
+
+// Driver 是持久化驱动接口，内置租约管理。
+// 框架通过 actorType + id 定位数据，src/dst 是 *S（快照指针）。
+//
+// Load 同时完成"加载快照 + 获取租约"，是原子操作：
+//   - 文档不存在 → 创建文档，设置 owner，返回 ErrNotFound + LeaseInfo（首次激活，用零值）
+//   - 文档存在且无主或租约已过期 → 抢占，返回数据 + 新的 LeaseInfo
+//   - 文档存在且被其他节点持有且未过期 → 返回 ErrLeaseTaken（含持有者信息）
+//
+// Save 同时完成"保存快照 + 续租"：
+//   - generation 匹配 → 写入数据 + 续租 TTL
+//   - generation 不匹配 → 租约已被抢占，拒绝写入
+type Driver interface {
+	// Load 加载快照并获取租约。
+	// 返回的 lease 非 nil 表示成功获取租约。
+	// 若数据不存在，返回 ErrNotFound，但 lease 仍然有效（首次激活）。
+	Load(ctx context.Context, actorType string, id string, owner string, dst any) (*LeaseInfo, error)
+
+	// Save 保存快照并续租。
+	// gen 和 owner 为当前持有的租约信息，用于 fencing 校验。
+	Save(ctx context.Context, actorType string, id string, owner string, src any, gen int64) error
+
+	// Release 释放租约（清空 owner），不删除数据。
+	// gen 和 owner 匹配时才释放。
+	Release(ctx context.Context, actorType string, id string, owner string, gen int64) error
 }
 
 // ErrNotFound 表示数据不存在，Load 返回此错误时框架使用零值初始化。
@@ -26,6 +66,7 @@ var ErrNotFound = errors.New("grain: snapshot not found")
 
 // JsonDriver 基于本地 JSON 文件的持久化驱动。
 // 每个 actor 对应一个文件：{dir}/{actorType}/{id}.json
+// 本地驱动无分布式租约竞争，owner 固定为当前进程，generation 简单递增。
 type JsonDriver struct {
 	dir string
 }
@@ -35,20 +76,37 @@ func NewJsonDriver(dir string) *JsonDriver {
 	return &JsonDriver{dir: dir}
 }
 
-func (d *JsonDriver) Load(_ context.Context, actorType string, id string, dst any) error {
+func (d *JsonDriver) Load(_ context.Context, actorType string, id string, owner string, dst any) (*LeaseInfo, error) {
 	path := d.filePath(actorType, id)
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return ErrNotFound
+			return &LeaseInfo{Key: id, Owner: owner, Generation: 1}, ErrNotFound
 		}
-		return err
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return json.NewDecoder(f).Decode(dst)
+
+	type fileDoc struct {
+		Generation int64           `json:"generation"`
+		Data       json.RawMessage `json:"data"`
+	}
+	var doc fileDoc
+	if err := json.NewDecoder(f).Decode(&doc); err != nil {
+		return nil, err
+	}
+
+	// 解码快照数据
+	if len(doc.Data) > 0 {
+		if err := json.Unmarshal(doc.Data, dst); err != nil {
+			return nil, err
+		}
+	}
+
+	return &LeaseInfo{Key: id, Owner: owner, Generation: doc.Generation + 1}, nil
 }
 
-func (d *JsonDriver) Save(_ context.Context, actorType string, id string, src any, _ int64) error {
+func (d *JsonDriver) Save(_ context.Context, actorType string, id string, _ string, src any, gen int64) error {
 	path := d.filePath(actorType, id)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -58,9 +116,22 @@ func (d *JsonDriver) Save(_ context.Context, actorType string, id string, src an
 		return err
 	}
 	defer func() { _ = f.Close() }()
+
+	// 写入 generation 和快照数据
+	type doc struct {
+		Generation int64 `json:"generation"`
+		Data       any   `json:"data"`
+	}
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
-	return enc.Encode(src)
+	return enc.Encode(doc{Generation: gen, Data: src})
+}
+
+func (d *JsonDriver) Release(_ context.Context, actorType string, id string, _ string, _ int64) error {
+	path := d.filePath(actorType, id)
+	// 本地驱动 Release 不删除文件，保持数据持久化
+	_ = path
+	return nil
 }
 
 func (d *JsonDriver) filePath(actorType string, id string) string {

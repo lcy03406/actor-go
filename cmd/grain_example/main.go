@@ -12,7 +12,6 @@ import (
 
 	"github.com/lcy03406/actor-go/actor"
 	"github.com/lcy03406/actor-go/grain"
-	"github.com/lcy03406/actor-go/lease"
 )
 
 // ─── Type Aliases (for readability) ───
@@ -77,13 +76,13 @@ func (*ForceSave) ReqType(_ PlayerId, _ *SaveReply) string { return "ForceSave" 
 
 func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 	actor.Serve(mgr, 100, func(b *RegBuilder) {
-		// WrapSpawn: on first message, acquires lease, loads persisted state,
+		// WrapSpawn: on first message, acquires lease + loads persisted state,
 		// then calls the handler. If state doesn't exist, starts with zero-value PlayerData.
 		actor.RegisterSpawn(b, grain.WrapSpawn(pm,
 			func(ctx *GrainCtx, req *Login, _ bool) (actor.OkReply, error) {
 				ctx.State().Data.HP = req.InitHP
 				ctx.State().Data.Level = req.InitLevel
-				ctx.State().Persist(ctx) // save immediately
+				ctx.State().Persist(ctx) // save + renew lease
 				ctx.Logger().Info("grain login", "hp", req.InitHP, "level", req.InitLevel)
 				return actor.OK, nil
 			}))
@@ -102,7 +101,7 @@ func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 		})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *ForceSave, _ bool) (*SaveReply, error) {
-			ctx.State().Persist(ctx) // save without quitting
+			ctx.State().Persist(ctx) // save + renew lease, without quitting
 			return &SaveReply{HP: ctx.State().Data.HP}, nil
 		})
 	})
@@ -113,12 +112,11 @@ func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	// Create PersistenceManager with JSON file driver and local lease
+	// Create PersistenceManager with JSON file driver
+	// Lease is now built into the driver, no separate lease.Manager needed
 	pm := grain.NewPersistenceManager(
 		grain.WithDriver(grain.NewJsonDriver("./grain_data")),
-		grain.WithLeaseManager(lease.NewLocalManager(30*time.Second)),
 		grain.WithNodeId("node-1"),
-		grain.WithRenewInterval(30*time.Second),
 	)
 
 	mgr := actor.NewManager()
@@ -141,7 +139,7 @@ func main() {
 		fmt.Printf("After attack: remainingHP=%d, alive=%v\n", reply.RemainingHP, reply.Alive)
 	}
 
-	// 3. Call: force save
+	// 3. Call: force save (also renews lease)
 	fmt.Println("\n=== 3. Call: Force Save ===")
 	saveReply, err := actor.Call(ctx, mgr, player, &ForceSave{})
 	if err != nil {
@@ -164,7 +162,6 @@ func main() {
 	if err != nil {
 		fmt.Printf("Attack error: %v\n", err)
 	} else {
-		// Login handler sets HP=999, overriding the persisted HP=70
 		fmt.Printf("After re-activation: HP=%d\n", reply2.RemainingHP)
 	}
 

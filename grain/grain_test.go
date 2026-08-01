@@ -5,12 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
-	"github.com/lcy03406/actor-go/lease"
 )
 
 // ─── 测试用类型 ───
@@ -79,13 +79,11 @@ type testActorCtx = actor.ActorContext[TestGrainId, testState]
 func newTestPMWithDir(dir string) *PersistenceManager {
 	return NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
 		WithNodeId("node-1"),
 	)
 }
 
 // setupTestRegistry 创建 manager 并注册一组标准的 grain handler。
-// 返回 manager 和已取消的 cancel（用于 cleanup）。
 func setupTestRegistry(t *testing.T, pm *PersistenceManager) *actor.Manager {
 	t.Helper()
 	mgr := actor.NewManager()
@@ -174,10 +172,8 @@ func TestLifecycle_ActivateDeactivate(t *testing.T) {
 
 func TestLifecycle_Persist(t *testing.T) {
 	dir := t.TempDir()
-	lm := lease.NewLocalManager(100 * time.Millisecond)
 	pm := NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lm),
 		WithNodeId("node-1"),
 	)
 
@@ -221,84 +217,39 @@ func TestLifecycle_Persist(t *testing.T) {
 	}
 }
 
-func TestLifecycle_AutoRenew(t *testing.T) {
-	dir := t.TempDir()
-	lm := lease.NewLocalManager(10 * time.Second)
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lm),
-		WithNodeId("node-1"),
-		WithRenewInterval(50*time.Millisecond),
-	)
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx)
-			return actor.OK, nil
-		})
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "renew-test"}, &TestSpawnReq{})
-	if err != nil {
-		t.Fatalf("call failed: %v", err)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "renew-test"}, &TestDeactivateReq{})
-	if err != nil {
-		t.Fatalf("deactivate failed: %v", err)
-	}
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "renew-test"})
-}
-
-func TestLifecycle_ManualRenew(t *testing.T) {
-	pm := newTestPMWithDir(t.TempDir())
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			if err := ctx.State().RenewLease(ctx); err != nil {
-				t.Errorf("manual renew failed: %v", err)
-			}
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "manual"}, &TestSpawnReq{})
-	if err != nil {
-		t.Fatalf("call failed: %v", err)
-	}
-}
-
 // TestJsonDriver 单独测试 JsonDriver 的 Load/Save。
 func TestJsonDriver_LoadSave(t *testing.T) {
 	dir := t.TempDir()
 	d := NewJsonDriver(dir)
 
+	// 首次 Load：创建文档，返回 ErrNotFound
+	var loaded TestGrainSnapshot
+	lease, err := d.Load(context.Background(), "test", "actor-1", "node-1", &loaded)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("first Load: want ErrNotFound, got %v", err)
+	}
+	if lease == nil || lease.Generation != 1 {
+		t.Errorf("first Load: want generation=1, got %v", lease)
+	}
+
+	// Save 数据
 	snapshot := &TestGrainSnapshot{Value: 100}
-	err := d.Save(context.Background(), "test", "actor-1", snapshot, 1)
+	err = d.Save(context.Background(), "test", "actor-1", "node-1", snapshot, 1)
 	if err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
-	var loaded TestGrainSnapshot
-	err = d.Load(context.Background(), "test", "actor-1", &loaded)
+	// 再次 Load：应返回数据
+	var loaded2 TestGrainSnapshot
+	lease2, err := d.Load(context.Background(), "test", "actor-1", "node-1", &loaded2)
 	if err != nil {
-		t.Fatalf("load failed: %v", err)
+		t.Fatalf("second Load failed: %v", err)
 	}
-	if loaded.Value != 100 {
-		t.Errorf("want 100, got %d", loaded.Value)
+	if lease2 == nil {
+		t.Fatal("lease should not be nil")
+	}
+	if loaded2.Value != 100 {
+		t.Errorf("want 100, got %d", loaded2.Value)
 	}
 }
 
@@ -308,9 +259,12 @@ func TestJsonDriver_LoadNotFound(t *testing.T) {
 	d := NewJsonDriver(dir)
 
 	var loaded TestGrainSnapshot
-	err := d.Load(context.Background(), "test", "no-such-actor", &loaded)
+	lease, err := d.Load(context.Background(), "test", "no-such-actor", "node-1", &loaded)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
+	}
+	if lease == nil {
+		t.Error("lease should not be nil even on ErrNotFound (first activation)")
 	}
 }
 
@@ -385,14 +339,12 @@ func TestSnapshotter_ShotSelf(t *testing.T) {
 		t.Errorf("NewPersist: want 42, got %d", *persist)
 	}
 
-	// 修改 data 后验证 TakeSnapshot 返回当前值
 	data = 100
 	snapshot := s.TakeSnapshot(&data)
 	if *snapshot != 100 {
 		t.Errorf("TakeSnapshot: want 100, got %d", *snapshot)
 	}
 
-	// LoadSnapshot 从 persist 恢复
 	other := 0
 	restored := &other
 	s.LoadSnapshot(&other, restored)
@@ -408,7 +360,6 @@ func TestSnapshotter_ShotSelf(t *testing.T) {
 }
 
 func TestSnapshotter_ShotSelf_LoadNil(t *testing.T) {
-	// 验证 LoadSnapshot 在 persist 为 nil 时不崩溃且不改写 data
 	var s ShotSelf[int]
 	data := 99
 	s.LoadSnapshot(&data, nil)
@@ -418,7 +369,6 @@ func TestSnapshotter_ShotSelf_LoadNil(t *testing.T) {
 }
 
 func TestSnapshotter_CustomRoundTrip(t *testing.T) {
-	// 验证自定义 Snapshotter 的完整 round-trip
 	var snap TestGrainSnapshotter
 	data := TestGrainData{Value: 55}
 
@@ -430,13 +380,11 @@ func TestSnapshotter_CustomRoundTrip(t *testing.T) {
 		t.Errorf("NewPersist should return zero-value snapshot, got %d", p.Value)
 	}
 
-	// TakeSnapshot
 	s := snap.TakeSnapshot(&data)
 	if s.Value != 55 {
 		t.Errorf("TakeSnapshot: want 55, got %d", s.Value)
 	}
 
-	// LoadSnapshot
 	recovered := TestGrainData{}
 	snap.LoadSnapshot(&recovered, s)
 	if recovered.Value != 55 {
@@ -445,7 +393,6 @@ func TestSnapshotter_CustomRoundTrip(t *testing.T) {
 }
 
 func TestSnapshotter_ShotSelf_Struct(t *testing.T) {
-	// 验证 ShotSelf 对 struct 类型的支持
 	type ComplexData struct {
 		Name  string
 		Count int
@@ -469,41 +416,8 @@ func TestSnapshotter_ShotSelf_Struct(t *testing.T) {
 
 // ─── Grain 激活失败 / 租约冲突测试 ───
 
-func TestLifecycle_ActivateAcquireLeaseFailure(t *testing.T) {
-	// 当租约管理器拒绝 Acquire 时，activate 应返回错误，handler 不应被调用
-	// 使用一个自定义的 lease manager 模拟 Acquire 失败
-	lm := &failingLeaseManager{}
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(t.TempDir())),
-		WithLeaseManager(lm),
-		WithNodeId("node-1"),
-	)
-
-	mgr := actor.NewManager()
-	spawnCalled := false
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			spawnCalled = true
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "fail-acquire"}, &TestSpawnReq{})
-	if err == nil {
-		t.Error("expected error when lease acquire fails")
-	}
-	if spawnCalled {
-		t.Error("handler should not be called when activate fails")
-	}
-}
-
 func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
-	// 同一 ID 被并发激活时，只有一个能成功获取租约
 	pm := newTestPMWithDir(t.TempDir())
-
 	mgr := setupTestRegistry(t, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -511,8 +425,6 @@ func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
 
 	id := TestGrainId{Name: "concurrent-activate"}
 	var wg sync.WaitGroup
-	successCount := int32(0)
-	errCount := int32(0)
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
@@ -526,14 +438,9 @@ func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-
-	// 至少有一个能成功
-	_ = successCount
-	_ = errCount
 }
 
 func TestLifecycle_ReactivationAfterDeactivateAndReacquire(t *testing.T) {
-	// 通过 Deactivate 正常停活后重新激活，验证数据恢复
 	pm := newTestPMWithDir(t.TempDir())
 	mgr := setupTestRegistry(t, pm)
 
@@ -546,20 +453,17 @@ func TestLifecycle_ReactivationAfterDeactivateAndReacquire(t *testing.T) {
 		t.Fatalf("initial spawn failed: %v", err)
 	}
 
-	// 修改数据
 	_, err = actor.Call(ctx, mgr, id, &TestMutateReq{Add: 100})
 	if err != nil {
 		t.Fatalf("mutate failed: %v", err)
 	}
 
-	// 通过 Deactivate 正常停活（保存数据 + 释放租约）
 	_, err = actor.Call(ctx, mgr, id, &TestDeactivateReq{})
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
 	actor.JoinActor[TestGrainId](mgr, id)
 
-	// 重新激活，数据应为 100（Deactivate 已保存）
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
 		t.Fatalf("reactivation failed: %v", err)
@@ -589,14 +493,12 @@ func TestLifecycle_MultipleGrainsIsolation(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			id := TestGrainId{Name: "isolated-" + itoa(idx)}
-			// 激活
+			id := TestGrainId{Name: "isolated-" + strconv.Itoa(idx)}
 			_, err := actor.Call(ctx, mgr, id, &TestSpawnReq{})
 			if err != nil {
 				t.Errorf("grain %d spawn failed: %v", idx, err)
 				return
 			}
-			// 写入
 			_, err = actor.Call(ctx, mgr, id, &TestMutateReq{Add: idx * 10})
 			if err != nil {
 				t.Errorf("grain %d mutate failed: %v", idx, err)
@@ -606,9 +508,8 @@ func TestLifecycle_MultipleGrainsIsolation(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 验证每个 grain 的数据隔离
 	for i := 0; i < grainCount; i++ {
-		id := TestGrainId{Name: "isolated-" + itoa(i)}
+		id := TestGrainId{Name: "isolated-" + strconv.Itoa(i)}
 		q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
 		if err != nil {
 			t.Errorf("grain %d query failed: %v", i, err)
@@ -622,7 +523,6 @@ func TestLifecycle_MultipleGrainsIsolation(t *testing.T) {
 }
 
 func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
-	// 多个 grain 停活后重新激活，验证各自数据恢复正确
 	pm := newTestPMWithDir(t.TempDir())
 	mgr := setupTestRegistry(t, pm)
 
@@ -632,7 +532,7 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 	grainCount := 5
 	ids := make([]TestGrainId, grainCount)
 	for i := 0; i < grainCount; i++ {
-		ids[i] = TestGrainId{Name: "multi-dar-" + itoa(i)}
+		ids[i] = TestGrainId{Name: "multi-dar-" + strconv.Itoa(i)}
 		_, err := actor.Call(ctx, mgr, ids[i], &TestSpawnReq{})
 		if err != nil {
 			t.Fatalf("spawn %d failed: %v", i, err)
@@ -643,7 +543,6 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 		}
 	}
 
-	// 全部停活
 	for i := 0; i < grainCount; i++ {
 		_, err := actor.Call(ctx, mgr, ids[i], &TestDeactivateReq{})
 		if err != nil {
@@ -652,7 +551,6 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 		actor.JoinActor[TestGrainId](mgr, ids[i])
 	}
 
-	// 重新激活并验证
 	for i := 0; i < grainCount; i++ {
 		_, err := actor.Call(ctx, mgr, ids[i], &TestSpawnReq{})
 		if err != nil {
@@ -673,79 +571,22 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 
 func TestPersistenceManager_Options(t *testing.T) {
 	dir := t.TempDir()
-	lm := lease.NewLocalManager(5 * time.Second)
 
 	pm := NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lm),
 		WithNodeId("test-node"),
-		WithRenewInterval(30*time.Second),
 	)
 
 	if pm.driver == nil {
 		t.Error("driver should not be nil")
 	}
-	if pm.leaseManager == nil {
-		t.Error("leaseManager should not be nil")
-	}
 	if pm.nodeId != "test-node" {
 		t.Errorf("nodeId: want test-node, got %s", pm.nodeId)
-	}
-	if pm.renewInterval != 30*time.Second {
-		t.Errorf("renewInterval: want 30s, got %v", pm.renewInterval)
-	}
-}
-
-func TestPersistenceManager_ZeroRenewInterval(t *testing.T) {
-	// renewInterval 为 0 表示不自动续约
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(t.TempDir())),
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
-		WithNodeId("node-1"),
-	)
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "no-renew"}, &TestSpawnReq{})
-	if err != nil {
-		t.Fatalf("spawn failed: %v", err)
-	}
-}
-
-func TestPersistenceManager_NilLeaseManager(t *testing.T) {
-	// 没有 lease manager 时，activate 会失败
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(t.TempDir())),
-		WithNodeId("node-1"),
-	)
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "no-lm"}, &TestSpawnReq{})
-	if err == nil {
-		t.Error("expected error when lease manager is nil")
 	}
 }
 
 func TestPersistenceManager_NilDriver(t *testing.T) {
 	pm := NewPersistenceManager(
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
 		WithNodeId("node-1"),
 	)
 
@@ -760,7 +601,6 @@ func TestPersistenceManager_NilDriver(t *testing.T) {
 	defer cancel()
 
 	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "no-driver"}, &TestSpawnReq{})
-	// 可能 panic 或返回错误，取决于 driver 是否为 nil
 	if err == nil {
 		t.Log("no error when driver is nil (might panic)")
 	}
@@ -772,20 +612,21 @@ func TestJsonDriver_Overwrite(t *testing.T) {
 	dir := t.TempDir()
 	d := NewJsonDriver(dir)
 
-	// 首次保存
+	// 首次 Save
 	snap := &TestGrainSnapshot{Value: 100}
-	if err := d.Save(context.Background(), "test", "actor-ow", snap, 1); err != nil {
+	if err := d.Save(context.Background(), "test", "actor-ow", "node-1", snap, 1); err != nil {
 		t.Fatalf("first save failed: %v", err)
 	}
 
 	// 覆盖写入
 	snap2 := &TestGrainSnapshot{Value: 200}
-	if err := d.Save(context.Background(), "test", "actor-ow", snap2, 2); err != nil {
+	if err := d.Save(context.Background(), "test", "actor-ow", "node-1", snap2, 2); err != nil {
 		t.Fatalf("second save failed: %v", err)
 	}
 
 	var loaded TestGrainSnapshot
-	if err := d.Load(context.Background(), "test", "actor-ow", &loaded); err != nil {
+	_, err := d.Load(context.Background(), "test", "actor-ow", "node-1", &loaded)
+	if err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
 	if loaded.Value != 200 {
@@ -800,22 +641,24 @@ func TestJsonDriver_MultipleActorTypes(t *testing.T) {
 	snap1 := &TestGrainSnapshot{Value: 1}
 	snap2 := &TestGrainSnapshot{Value: 2}
 
-	if err := d.Save(context.Background(), "player", "p1", snap1, 1); err != nil {
+	if err := d.Save(context.Background(), "player", "p1", "node-1", snap1, 1); err != nil {
 		t.Fatalf("save player failed: %v", err)
 	}
-	if err := d.Save(context.Background(), "npc", "p1", snap2, 1); err != nil {
+	if err := d.Save(context.Background(), "npc", "p1", "node-1", snap2, 1); err != nil {
 		t.Fatalf("save npc failed: %v", err)
 	}
 
 	var loaded TestGrainSnapshot
-	if err := d.Load(context.Background(), "player", "p1", &loaded); err != nil {
+	_, err := d.Load(context.Background(), "player", "p1", "node-1", &loaded)
+	if err != nil {
 		t.Fatalf("load player failed: %v", err)
 	}
 	if loaded.Value != 1 {
 		t.Errorf("player: want 1, got %d", loaded.Value)
 	}
 
-	if err := d.Load(context.Background(), "npc", "p1", &loaded); err != nil {
+	_, err = d.Load(context.Background(), "npc", "p1", "node-1", &loaded)
+	if err != nil {
 		t.Fatalf("load npc failed: %v", err)
 	}
 	if loaded.Value != 2 {
@@ -828,11 +671,10 @@ func TestJsonDriver_SaveCreatesDirectory(t *testing.T) {
 	d := NewJsonDriver(dir)
 
 	snap := &TestGrainSnapshot{Value: 42}
-	if err := d.Save(context.Background(), "type", "id", snap, 1); err != nil {
+	if err := d.Save(context.Background(), "type", "id", "node-1", snap, 1); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
-	// 验证目录和文件存在
 	expectedPath := filepath.Join(dir, "type", "id.json")
 	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
 		t.Errorf("file not created at %s", expectedPath)
@@ -840,14 +682,10 @@ func TestJsonDriver_SaveCreatesDirectory(t *testing.T) {
 }
 
 func TestJsonDriver_SaveInvalidPath(t *testing.T) {
-	// Windows 上使用包含非法字符的路径，或者只读目录
-	// 使用 NUL 设备路径作为测试
 	d := NewJsonDriver("NUL")
 	snap := &TestGrainSnapshot{Value: 1}
-	err := d.Save(context.Background(), "test", "id", snap, 1)
+	err := d.Save(context.Background(), "test", "id", "node-1", snap, 1)
 	if err == nil {
-		// 在 Windows 上可能不会报错，改用只读目录测试
-		// 或者直接跳过
 		t.Skip("cannot create invalid path on this platform")
 	}
 }
@@ -876,7 +714,6 @@ func TestLifecycle_DeactivateSavesState(t *testing.T) {
 	}
 	actor.JoinActor[TestGrainId](mgr, id)
 
-	// 验证通过 actor 恢复数据
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
 		t.Fatalf("reactivation failed: %v", err)
@@ -891,18 +728,15 @@ func TestLifecycle_DeactivateSavesState(t *testing.T) {
 }
 
 func TestLifecycle_PersistMultipleTimes(t *testing.T) {
-	// 多次 Persist 不退出，验证数据累积正确
 	dir := t.TempDir()
 	pm := NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
 		WithNodeId("node-1"),
 	)
 
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			// 只在首次激活时设置初始值，重新激活时不应覆盖已加载的数据
 			return &TestSpawnReply{Activated: true}, nil
 		}))
 		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
@@ -937,7 +771,6 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 		}
 	}
 
-	// 停活后重新激活
 	_, err = actor.Call(ctx, mgr, id, &TestDeactivateReq{})
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
@@ -957,12 +790,16 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 	}
 }
 
-// ─── failingLeaseManager 用于模拟 Acquire 失败 ───
+// ─── ErrLeaseTaken 测试 ───
 
-type failingLeaseManager struct{}
-
-func (f *failingLeaseManager) Acquire(_ context.Context, _, _ string) (*lease.Lease, error) {
-	return nil, lease.ErrNotAcquired
+func TestErrLeaseTaken_Error(t *testing.T) {
+	err := &ErrLeaseTaken{
+		Key:        "player:123",
+		Owner:      "node-2",
+		Generation: 5,
+	}
+	msg := err.Error()
+	if msg == "" {
+		t.Error("ErrLeaseTaken.Error() should not be empty")
+	}
 }
-func (f *failingLeaseManager) Release(_ context.Context, _ *lease.Lease) error { return nil }
-func (f *failingLeaseManager) Renew(_ context.Context, _ *lease.Lease) error   { return nil }

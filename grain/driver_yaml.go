@@ -10,6 +10,7 @@ import (
 
 // YamlDriver 基于本地 YAML 文件的持久化驱动。
 // 每个 actor 对应一个文件：{dir}/{actorType}/{id}.yaml
+// 本地驱动无分布式租约竞争，owner 固定为当前进程，generation 简单递增。
 type YamlDriver struct {
 	dir string
 }
@@ -19,20 +20,31 @@ func NewYamlDriver(dir string) *YamlDriver {
 	return &YamlDriver{dir: dir}
 }
 
-func (d *YamlDriver) Load(_ context.Context, actorType string, id string, dst any) error {
+func (d *YamlDriver) Load(_ context.Context, actorType string, id string, owner string, dst any) (*LeaseInfo, error) {
 	path := d.filePath(actorType, id)
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return ErrNotFound
+			return &LeaseInfo{Key: id, Owner: owner, Generation: 1}, ErrNotFound
 		}
-		return err
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return yaml.NewDecoder(f).Decode(dst)
+
+	type fileDoc struct {
+		Generation int64  `yaml:"generation"`
+		Data       any    `yaml:"data"`
+	}
+	var doc fileDoc
+	doc.Data = dst
+	if err := yaml.NewDecoder(f).Decode(&doc); err != nil {
+		return nil, err
+	}
+
+	return &LeaseInfo{Key: id, Owner: owner, Generation: doc.Generation + 1}, nil
 }
 
-func (d *YamlDriver) Save(_ context.Context, actorType string, id string, src any, _ int64) error {
+func (d *YamlDriver) Save(_ context.Context, actorType string, id string, _ string, src any, gen int64) error {
 	path := d.filePath(actorType, id)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -42,7 +54,18 @@ func (d *YamlDriver) Save(_ context.Context, actorType string, id string, src an
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	return yaml.NewEncoder(f).Encode(src)
+
+	type doc struct {
+		Generation int64 `yaml:"generation"`
+		Data       any   `yaml:"data"`
+	}
+	return yaml.NewEncoder(f).Encode(doc{Generation: gen, Data: src})
+}
+
+func (d *YamlDriver) Release(_ context.Context, actorType string, id string, _ string, _ int64) error {
+	// 本地驱动 Release 不删除文件
+	_ = d.filePath(actorType, id)
+	return nil
 }
 
 func (d *YamlDriver) filePath(actorType string, id string) string {
