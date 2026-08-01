@@ -11,15 +11,12 @@ type result[R PtrReply[R0], R0 any] struct {
 	Err error
 }
 
-func errorResult[R PtrReply[R0], R0 any](err error) (res result[R, R0]) {
-	res.Err = err
-	return
-}
-
 type invoke[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
-	h   *handlerEntry[A, S, Q, R, Q0, R0]
-	req Q
-	ch  chan result[R, R0]
+	from  From
+	h     *handlerEntry[A, S, Q, R, Q0, R0]
+	req   Q
+	ch    chan result[R, R0]
+	clean func(R)
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) CanSpawn() bool {
@@ -37,10 +34,22 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Allow(id A, spawning bool) bool {
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning bool) {
+	actor.ctrl.invokeLogger(i.from)
+	defer actor.ctrl.resetLogger()
+	actor.Logger().Info("recv invoke", "req", reqTypeOf(i.req))
 	rep, err := i.h.fn(actor, i.req, spawning)
 	if i.ch != nil {
+		if rep != nil && i.clean != nil {
+			defer func() {
+				if r := recover(); r != nil {
+					i.clean(rep)
+				}
+			}()
+		}
+		actor.Logger().Info("send reply", "rep", rep)
 		i.ch <- result[R, R0]{rep, err}
 	}
+	actor.Logger().Info("return")
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) Fail(err error) {
@@ -49,14 +58,14 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Fail(err error) {
 	}
 }
 
-// panicRecoverInvoke 是 handler panic 恢复后插入的占位消息，
-// 不调用用户 handler，只打日志。后续请求照常处理。
-type panicRecoverInvoke[A ActorId, S anyState] struct {
+// panicDropInvoke 是 handler panic 且用户未注册 PanicReq recovery handler 时，
+// 用于原地替换原消息的安全占位：Invoke 为空操作（不再次 panic），
+// Fail 为空操作。actor 保持存活——ctx 原样保留，idle 状态按 panic 前 settle，
+// 本轮结束后 actor 回到空闲池，等待后续消息。
+type panicDropInvoke[A ActorId, S anyState] struct {
 	err error
 }
 
-func (p *panicRecoverInvoke[A, S]) Allow(_ A, _ bool) bool { return true }
-func (p *panicRecoverInvoke[A, S]) Invoke(actor *ActorContext[A, S], _ bool) {
-	actor.Logger().Warn("handler panic recovered, resuming", "err", p.err)
-}
-func (p *panicRecoverInvoke[A, S]) Fail(_ error) {}
+func (p *panicDropInvoke[A, S]) Allow(_ A, _ bool) bool               { return true }
+func (p *panicDropInvoke[A, S]) Invoke(_ *ActorContext[A, S], _ bool) {}
+func (p *panicDropInvoke[A, S]) Fail(_ error)                         {}

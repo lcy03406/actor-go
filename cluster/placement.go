@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"fmt"
 	"hash/crc32"
 	"sort"
 )
@@ -19,8 +20,13 @@ type PlacementStrategy interface {
 //
 // 使用 CRC32 计算哈希值，每个物理节点创建 virtualNodes 个虚拟节点。
 // 虚拟节点越多分布越均匀，但哈希环重建成本越高。
+//
+// 若设置了 GroupMapping，则只会在能承载该 ActorType 的节点间进行哈希放置。
 type ConsistentHashPlacement struct {
 	VirtualNodes int
+	// Mapping 定义节点类型到 Actor 类型的映射。
+	// 为 nil 时表示同构集群（向后兼容）。
+	Mapping GroupMapping
 }
 
 // NewConsistentHashPlacement 创建一个一致性哈希放置策略。
@@ -30,6 +36,12 @@ func NewConsistentHashPlacement(virtualNodes int) *ConsistentHashPlacement {
 		virtualNodes = 128
 	}
 	return &ConsistentHashPlacement{VirtualNodes: virtualNodes}
+}
+
+// WithGroupMapping 设置节点类型到 Actor 类型的映射。
+func (p *ConsistentHashPlacement) WithGroupMapping(m GroupMapping) *ConsistentHashPlacement {
+	p.Mapping = m
+	return p
 }
 
 // hashRingEntry 是哈希环上的一个条目。
@@ -42,16 +54,30 @@ type hashRingEntry struct {
 //
 // 算法：对每个节点创建 virtualNodes 个虚拟节点，所有虚拟节点按哈希值排序形成环，
 // 目标 key 的哈希在环上顺时针找到的第一个节点即为偏好节点。
+// 若存在异构节点（设置了 Mapping），则仅在有对应 Group 的节点间进行哈希放置。
 func (p *ConsistentHashPlacement) Place(actorType, actorId string, members NodeSet) Node {
 	if len(members) == 0 {
 		return Node{}
 	}
-	if len(members) == 1 {
-		return members[0]
+
+	// 异构感知：仅考虑能承载该 ActorType 的节点
+	eligible := p.filterEligible(actorType, members)
+	if len(eligible) == 0 {
+		return Node{}
+	}
+	if len(eligible) == 1 {
+		return eligible[0]
 	}
 
 	key := actorType + ":" + actorId
-	return p.placeOnRing(key, members)
+	return p.placeOnRing(key, eligible)
+}
+
+func (p *ConsistentHashPlacement) filterEligible(actorType string, members NodeSet) NodeSet {
+	if p.Mapping == nil {
+		return members
+	}
+	return p.Mapping.FilterByGroup(members, actorType)
 }
 
 func (p *ConsistentHashPlacement) placeOnRing(key string, members NodeSet) Node {
@@ -82,6 +108,44 @@ func (p *ConsistentHashPlacement) placeOnRing(key string, members NodeSet) Node 
 	}
 
 	return ring[idx].node
+}
+
+// ─── PlacementError ───
+
+// PlacementError 表示没有可用节点放置 Actor。
+type PlacementError struct {
+	ActorType string
+	ActorId   string
+}
+
+func (e *PlacementError) Error() string {
+	return fmt.Sprintf("no eligible node for actor %s:%s", e.ActorType, e.ActorId)
+}
+
+// ─── GroupAwarePlacement ───
+
+// GroupAwarePlacement 是 PlacementStrategy 的包装器，
+// 通过 GroupMapping 在调用底层策略前自动过滤掉不承载指定 ActorType 的节点。
+// 这允许任何 PlacementStrategy 在异构集群中正确工作。
+//
+// 如果所有节点 Type 为空（同构模式），此包装器透明传递，不影响原有行为。
+type GroupAwarePlacement struct {
+	inner   PlacementStrategy
+	mapping GroupMapping
+}
+
+// NewGroupAwarePlacement 创建一个支持异构感知的放置策略包装器。
+func NewGroupAwarePlacement(inner PlacementStrategy, mapping GroupMapping) *GroupAwarePlacement {
+	return &GroupAwarePlacement{inner: inner, mapping: mapping}
+}
+
+// Place 先过滤出承载指定 ActorType 的节点，再委托给底层策略。
+func (g *GroupAwarePlacement) Place(actorType, actorId string, members NodeSet) Node {
+	eligible := g.mapping.FilterByGroup(members, actorType)
+	if len(eligible) == 0 {
+		return Node{}
+	}
+	return g.inner.Place(actorType, actorId, eligible)
 }
 
 func itoa(n int) string {

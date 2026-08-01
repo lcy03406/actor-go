@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -72,9 +74,10 @@ func (*TestRpcClose) ReqType(_ TestRpcId, _ actor.OkReply) string { return "Test
 func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 	t.Helper()
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
+	mgr := actor.NewManager(slog.Default())
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
 			return actor.OK, nil
 		})
@@ -89,16 +92,8 @@ func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 		})
 	})
 
-	// 获取随机端口
-	listener, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("failed to listen: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
 	server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-		fmt.Sprintf("localhost:%d", port),
+		"localhost:0",
 		mgr,
 		func(b *testRegBuilder) {
 			rpc.RegisterRequest(b, &TestRpcLogin{})
@@ -113,7 +108,9 @@ func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 	// 等待服务端就绪
 	time.Sleep(300 * time.Millisecond)
 
-	return server, mgr, port
+	_, port, _ := net.SplitHostPort(server.Addr())
+	p, _ := strconv.Atoi(port)
+	return server, mgr, p
 }
 
 // setupRPCClient 创建并连接 RPC 客户端。
@@ -204,20 +201,17 @@ func TestRPCCall(t *testing.T) {
 // TestRPCCallSpawn 测试远程 Call 触发 spawn（RequestSpawn 模式）。
 func TestRPCCallSpawn(t *testing.T) {
 	// 使用带 RequestSpawn 的服务端
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
+	mgr := actor.NewManager(slog.Default())
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterServe(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLoginWithReply, spawning bool) (*TestRpcAddReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
 			return &TestRpcAddReply{Result: a.State().Value}, nil
 		})
 	})
 
-	listener, _ := net.Listen("tcp", "localhost:0")
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
 	server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-		fmt.Sprintf("localhost:%d", port),
+		"localhost:0",
 		mgr,
 		func(b *testRegBuilder) {
 			rpc.RegisterRequest(b, &TestRpcLoginWithReply{})
@@ -227,7 +221,9 @@ func TestRPCCallSpawn(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	time.Sleep(300 * time.Millisecond)
 
-	client := setupRPCClient(t, port)
+	_, port, _ := net.SplitHostPort(server.Addr())
+	p, _ := strconv.Atoi(port)
+	client := setupRPCClient(t, p)
 	defer client.Close()
 
 	// 首次 Call 触发 spawn + 返回回复
@@ -266,9 +262,10 @@ func TestRPCCallTimeout(t *testing.T) {
 // TestRPCCallTimeoutExceeded 测试超时发生时 Call 返回错误。
 func TestRPCCallTimeoutExceeded(t *testing.T) {
 	// 使用带延迟 handler 的服务端
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
+	mgr := actor.NewManager(slog.Default())
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
 			return actor.OK, nil
 		})
@@ -278,12 +275,8 @@ func TestRPCCallTimeoutExceeded(t *testing.T) {
 		})
 	})
 
-	listener, _ := net.Listen("tcp", "localhost:0")
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
 	server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-		fmt.Sprintf("localhost:%d", port),
+		"localhost:0",
 		mgr,
 		func(b *testRegBuilder) {
 			rpc.RegisterRequest(b, &TestRpcLogin{})
@@ -294,7 +287,9 @@ func TestRPCCallTimeoutExceeded(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	time.Sleep(300 * time.Millisecond)
 
-	client := setupRPCClient(t, port)
+	_, port, _ := net.SplitHostPort(server.Addr())
+	p, _ := strconv.Atoi(port)
+	client := setupRPCClient(t, p)
 	defer client.Close()
 
 	id := TestRpcId{ServerId: 1, OpenId: "timeout_exceed"}
