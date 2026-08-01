@@ -12,14 +12,15 @@ import (
 
 	"github.com/lcy03406/actor-go/actor"
 	"github.com/lcy03406/actor-go/grain"
-	"github.com/lcy03406/actor-go/lease"
 )
 
 // ─── Type Aliases (for readability) ───
 
 type (
-	PlayerId   = grainPlayerId
-	GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
+	PlayerId = grainPlayerId
+	// GrainState 的最后一个参数是 Snapshotter：这里用值类型 grain.ShotSelf[PlayerData]，
+	// 注册时把零值实例传给 SetupGrain。
+	GrainState = grain.State[PlayerId, PlayerData, PlayerData, grain.ShotSelf[PlayerData]]
 	GrainCtx   = actor.ActorContext[PlayerId, GrainState]
 	RegBuilder = actor.RegistryBuilder[PlayerId, GrainState]
 )
@@ -76,17 +77,34 @@ func (*ForceSave) ReqType(_ PlayerId, _ *SaveReply) string { return "ForceSave" 
 // ─── Handlers ───
 
 func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
-	actor.Serve(mgr, 100, func(b *RegBuilder) {
-		// WrapSpawn: on first message, acquires lease, loads persisted state,
-		// then calls the handler. If state doesn't exist, starts with zero-value PlayerData.
-		actor.RegisterSpawn(b, grain.WrapSpawn(pm,
-			func(ctx *GrainCtx, req *Login, _ bool) (actor.OkReply, error) {
-				ctx.State().Data.HP = req.InitHP
-				ctx.State().Data.Level = req.InitLevel
-				ctx.State().Persist(ctx) // save immediately
-				ctx.Logger().Info("grain login", "hp", req.InitHP, "level", req.InitLevel)
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *RegBuilder) {
+		// 使用 SetupGrain 将生命周期托管给框架：
+		// OnSpawn 自动 Activate 并按 onActivate 回调初始化，
+		// OnQuit 自动 Persist + 释放租约，并按 WithAutoPersistInterval 定时存盘。
+		grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, func(ctx *GrainCtx, created bool) error {
+			if created {
+				// 首次创建时初始化数据（initialized HP/Level 由 Login 传入）。
+				ctx.State().Data.HP = 100
+				ctx.State().Data.Level = 1
+				ctx.Logger().Info("grain created")
+			} else {
+				ctx.Logger().Info("grain loaded from disk")
+			}
+			return nil
+		})
+
+		// 注意：不再需要在 spawn/serve 中手动 Activate / Persist / Deactivate，
+		// 框架已通过 OnSpawn / OnQuit 自动管理。下面 handler 只关心业务。
+		actor.RegisterSpawn(b,
+			func(ctx *GrainCtx, req *Login, spawning bool) (actor.OkReply, error) {
+				// 若首次创建，用 Login 参数覆盖默认初始化值。
+				if ctx.State().Data.HP == 0 {
+					ctx.State().Data.HP = req.InitHP
+					ctx.State().Data.Level = req.InitLevel
+				}
+				ctx.Logger().Info("grain login", "hp", ctx.State().Data.HP, "level", ctx.State().Data.Level)
 				return actor.OK, nil
-			}))
+			})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *Attack, _ bool) (*AttackReply, error) {
 			ctx.State().Data.HP -= req.Damage
@@ -96,13 +114,13 @@ func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 		})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *SaveAndQuit, _ bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx) // save + release lease + quit
-			ctx.Logger().Info("grain deactivated")
+			ctx.Quit() // 触发 OnQuit 自动 Persist + 释放租约
+			ctx.Logger().Info("grain save and quit")
 			return actor.OK, nil
 		})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *ForceSave, _ bool) (*SaveReply, error) {
-			ctx.State().Persist(ctx) // save without quitting
+			ctx.State().Persist(ctx) // 主动存盘 + 续租（可选，定时存盘已自动进行）
 			return &SaveReply{HP: ctx.State().Data.HP}, nil
 		})
 	})
@@ -113,15 +131,16 @@ func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	// Create PersistenceManager with JSON file driver and local lease
+	// Create PersistenceManager with JSON file driver
+	// Lease is now built into the driver, no separate lease.Manager needed.
+	// WithAutoPersistInterval 让框架每隔 5s 自动存盘续租。
 	pm := grain.NewPersistenceManager(
 		grain.WithDriver(grain.NewJsonDriver("./grain_data")),
-		grain.WithLeaseManager(lease.NewLocalManager(30*time.Second)),
 		grain.WithNodeId("node-1"),
-		grain.WithRenewInterval(30*time.Second),
+		grain.WithAutoPersistInterval(5*time.Second),
 	)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupGrainPlayer(mgr, pm)
 
 	ctx := context.Background()
@@ -141,7 +160,7 @@ func main() {
 		fmt.Printf("After attack: remainingHP=%d, alive=%v\n", reply.RemainingHP, reply.Alive)
 	}
 
-	// 3. Call: force save
+	// 3. Call: force save (also renews lease)
 	fmt.Println("\n=== 3. Call: Force Save ===")
 	saveReply, err := actor.Call(ctx, mgr, player, &ForceSave{})
 	if err != nil {
@@ -164,7 +183,6 @@ func main() {
 	if err != nil {
 		fmt.Printf("Attack error: %v\n", err)
 	} else {
-		// Login handler sets HP=999, overriding the persisted HP=70
 		fmt.Printf("After re-activation: HP=%d\n", reply2.RemainingHP)
 	}
 

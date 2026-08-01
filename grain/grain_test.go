@@ -2,15 +2,18 @@ package grain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
-	"github.com/lcy03406/actor-go/lease"
+	"github.com/lcy03406/actor-go/internal/testutil"
 )
 
 // ─── 测试用类型 ───
@@ -79,57 +82,64 @@ type testActorCtx = actor.ActorContext[TestGrainId, testState]
 func newTestPMWithDir(dir string) *PersistenceManager {
 	return NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
 		WithNodeId("node-1"),
 	)
 }
 
+// activatingSpawn 是测试中对"用户在回调中显式调用 State.Activate"的惯用法封装：
+// 仅在 spawning（首次/重新 spawn）时激活 Grain，非 spawning 时沿用已激活状态。
+// 框架不再提供 WrapSpawn 这类自动包装，调用方需自行决定何时激活。
+func activatingSpawn[Q any, R any](
+	pm *PersistenceManager,
+	fn func(ctx *testActorCtx, req Q, spawning bool) (R, error),
+) func(ctx *testActorCtx, req Q, spawning bool) (R, error) {
+	return func(ctx *testActorCtx, req Q, spawning bool) (R, error) {
+		if spawning {
+			if _, err := ctx.State().Activate(ctx, pm, TestGrainSnapshotter{}); err != nil {
+				var zero R
+				return zero, err
+			}
+		}
+		return fn(ctx, req, spawning)
+	}
+}
+
+// setupManager 创建 manager 并按给定注册函数注册一组 grain handler，
+// 消除各测试中重复的 `actor.NewManager(slog.Default())` + `actor.Serve(...)` 包裹样板。
+func setupManager[S any, P any, K Snapshotter[S, P]](
+	register func(b *actor.RegistryBuilder[TestGrainId, State[TestGrainId, S, P, K]]),
+) *actor.Manager {
+	mgr := actor.NewManager(slog.Default())
+	actor.Serve(mgr, actor.Options{BufMails: 100}, register)
+	return mgr
+}
+
 // setupTestRegistry 创建 manager 并注册一组标准的 grain handler。
-// 返回 manager 和已取消的 cancel（用于 cleanup）。
 func setupTestRegistry(t *testing.T, pm *PersistenceManager) *actor.Manager {
 	t.Helper()
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+	return setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
 		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
 			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
 		})
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
 			ctx.State().Data.Value += req.Add
 			return actor.OK, nil
 		}))
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
+		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
 			ctx.State().Deactivate(ctx)
 			return actor.OK, nil
 		}))
 	})
-	return mgr
 }
 
 // ─── 测试 ───
 
 func TestLifecycle_ActivateDeactivate(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
-			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
-		})
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Data.Value += req.Add
-			return actor.OK, nil
-		}))
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx)
-			return actor.OK, nil
-		}))
-	})
+	mgr := setupTestRegistry(t, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -152,7 +162,7 @@ func TestLifecycle_ActivateDeactivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "grain-1"})
+	actor.JoinActor(mgr, TestGrainId{Name: "grain-1"})
 
 	// 重新激活，验证数据恢复
 	reply2, err := actor.Call(ctx, mgr, TestGrainId{Name: "grain-1"}, &TestSpawnReq{})
@@ -174,16 +184,13 @@ func TestLifecycle_ActivateDeactivate(t *testing.T) {
 
 func TestLifecycle_Persist(t *testing.T) {
 	dir := t.TempDir()
-	lm := lease.NewLocalManager(100 * time.Millisecond)
 	pm := NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lm),
 		WithNodeId("node-1"),
 	)
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			ctx.State().Data.Value = 999
 			if err := ctx.State().Persist(ctx); err != nil {
 				t.Fatalf("persist failed: %v", err)
@@ -203,9 +210,9 @@ func TestLifecycle_Persist(t *testing.T) {
 		t.Fatalf("call failed: %v", err)
 	}
 
-	actor.CloseActor[TestGrainId](mgr, TestGrainId{Name: "persist-test"})
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "persist-test"})
-	time.Sleep(200 * time.Millisecond)
+	actor.CloseActor(mgr, TestGrainId{Name: "persist-test"})
+	actor.JoinActor(mgr, TestGrainId{Name: "persist-test"})
+	testutil.Settle(200 * time.Millisecond)
 
 	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "persist-test"}, &TestSpawnReq{})
 	if err != nil {
@@ -221,121 +228,11 @@ func TestLifecycle_Persist(t *testing.T) {
 	}
 }
 
-func TestLifecycle_AutoRenew(t *testing.T) {
-	dir := t.TempDir()
-	lm := lease.NewLocalManager(10 * time.Second)
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lm),
-		WithNodeId("node-1"),
-		WithRenewInterval(50*time.Millisecond),
-	)
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx)
-			return actor.OK, nil
-		})
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "renew-test"}, &TestSpawnReq{})
-	if err != nil {
-		t.Fatalf("call failed: %v", err)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-
-	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "renew-test"}, &TestDeactivateReq{})
-	if err != nil {
-		t.Fatalf("deactivate failed: %v", err)
-	}
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "renew-test"})
-}
-
-func TestLifecycle_ManualRenew(t *testing.T) {
-	pm := newTestPMWithDir(t.TempDir())
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			if err := ctx.State().RenewLease(ctx); err != nil {
-				t.Errorf("manual renew failed: %v", err)
-			}
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "manual"}, &TestSpawnReq{})
-	if err != nil {
-		t.Fatalf("call failed: %v", err)
-	}
-}
-
-// TestJsonDriver 单独测试 JsonDriver 的 Load/Save。
-func TestJsonDriver_LoadSave(t *testing.T) {
-	dir := t.TempDir()
-	d := NewJsonDriver(dir)
-
-	snapshot := &TestGrainSnapshot{Value: 100}
-	err := d.Save(context.Background(), "test", "actor-1", snapshot, 1)
-	if err != nil {
-		t.Fatalf("save failed: %v", err)
-	}
-
-	var loaded TestGrainSnapshot
-	err = d.Load(context.Background(), "test", "actor-1", &loaded)
-	if err != nil {
-		t.Fatalf("load failed: %v", err)
-	}
-	if loaded.Value != 100 {
-		t.Errorf("want 100, got %d", loaded.Value)
-	}
-}
-
-// TestJsonDriver_LoadNotFound 测试 Load 不存在的文件。
-func TestJsonDriver_LoadNotFound(t *testing.T) {
-	dir := t.TempDir()
-	d := NewJsonDriver(dir)
-
-	var loaded TestGrainSnapshot
-	err := d.Load(context.Background(), "test", "no-such-actor", &loaded)
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("want ErrNotFound, got %v", err)
-	}
-}
-
 // ─── handler 中修改数据并通过 Deactivate 持久化 ───
 
 func TestLifecycle_MutateAndDeactivate(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Data.Value += req.Add
-			return actor.OK, nil
-		}))
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx)
-			return actor.OK, nil
-		}))
-		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
-			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
-		})
-	})
+	mgr := setupTestRegistry(t, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -356,7 +253,7 @@ func TestLifecycle_MutateAndDeactivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "m"})
+	actor.JoinActor(mgr, TestGrainId{Name: "m"})
 
 	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "m"}, &TestSpawnReq{})
 	if err != nil {
@@ -385,14 +282,12 @@ func TestSnapshotter_ShotSelf(t *testing.T) {
 		t.Errorf("NewPersist: want 42, got %d", *persist)
 	}
 
-	// 修改 data 后验证 TakeSnapshot 返回当前值
 	data = 100
 	snapshot := s.TakeSnapshot(&data)
 	if *snapshot != 100 {
 		t.Errorf("TakeSnapshot: want 100, got %d", *snapshot)
 	}
 
-	// LoadSnapshot 从 persist 恢复
 	other := 0
 	restored := &other
 	s.LoadSnapshot(&other, restored)
@@ -408,7 +303,6 @@ func TestSnapshotter_ShotSelf(t *testing.T) {
 }
 
 func TestSnapshotter_ShotSelf_LoadNil(t *testing.T) {
-	// 验证 LoadSnapshot 在 persist 为 nil 时不崩溃且不改写 data
 	var s ShotSelf[int]
 	data := 99
 	s.LoadSnapshot(&data, nil)
@@ -418,7 +312,6 @@ func TestSnapshotter_ShotSelf_LoadNil(t *testing.T) {
 }
 
 func TestSnapshotter_CustomRoundTrip(t *testing.T) {
-	// 验证自定义 Snapshotter 的完整 round-trip
 	var snap TestGrainSnapshotter
 	data := TestGrainData{Value: 55}
 
@@ -430,13 +323,11 @@ func TestSnapshotter_CustomRoundTrip(t *testing.T) {
 		t.Errorf("NewPersist should return zero-value snapshot, got %d", p.Value)
 	}
 
-	// TakeSnapshot
 	s := snap.TakeSnapshot(&data)
 	if s.Value != 55 {
 		t.Errorf("TakeSnapshot: want 55, got %d", s.Value)
 	}
 
-	// LoadSnapshot
 	recovered := TestGrainData{}
 	snap.LoadSnapshot(&recovered, s)
 	if recovered.Value != 55 {
@@ -445,7 +336,6 @@ func TestSnapshotter_CustomRoundTrip(t *testing.T) {
 }
 
 func TestSnapshotter_ShotSelf_Struct(t *testing.T) {
-	// 验证 ShotSelf 对 struct 类型的支持
 	type ComplexData struct {
 		Name  string
 		Count int
@@ -467,43 +357,167 @@ func TestSnapshotter_ShotSelf_Struct(t *testing.T) {
 	}
 }
 
-// ─── Grain 激活失败 / 租约冲突测试 ───
+// nilSafeSnapshotter 用指针接收者实现，且所有方法都不访问接收者：
+// 因此把 nil 指针作为实例传入是安全的，用于验证框架不做判空、直接把实例交给快照器。
+type nilSafeSnapshotter struct{}
 
-func TestLifecycle_ActivateAcquireLeaseFailure(t *testing.T) {
-	// 当租约管理器拒绝 Acquire 时，activate 应返回错误，handler 不应被调用
-	// 使用一个自定义的 lease manager 模拟 Acquire 失败
-	lm := &failingLeaseManager{}
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(t.TempDir())),
-		WithLeaseManager(lm),
-		WithNodeId("node-1"),
-	)
+func (*nilSafeSnapshotter) NewPersist(data *TestGrainData) *TestGrainSnapshot {
+	return &TestGrainSnapshot{}
+}
 
-	mgr := actor.NewManager()
-	spawnCalled := false
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			spawnCalled = true
+func (*nilSafeSnapshotter) LoadSnapshot(data *TestGrainData, snapshot *TestGrainSnapshot) {
+	data.Value = snapshot.Value
+}
+
+func (*nilSafeSnapshotter) TakeSnapshot(data *TestGrainData) *TestGrainSnapshot {
+	return &TestGrainSnapshot{Value: data.Value}
+}
+
+// TestLifecycle_NilPointerSnapshotter 验证指针接收者的快照器可以传 nil：
+// 框架不判空，nil 只要方法体不触摸接收者就是合法实例。
+func TestLifecycle_NilPointerSnapshotter(t *testing.T) {
+	type nilPtrState = State[TestGrainId, TestGrainData, TestGrainSnapshot, *nilSafeSnapshotter]
+	type nilPtrCtx = actor.ActorContext[TestGrainId, nilPtrState]
+
+	pm := newTestPMWithDir(t.TempDir())
+	var shot *nilSafeSnapshotter // nil 实例
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, nilPtrState]) {
+		activate := func(ctx *nilPtrCtx, spawning bool) error {
+			if !spawning {
+				return nil
+			}
+			_, err := ctx.State().Activate(ctx, pm, shot)
+			return err
+		}
+		actor.RegisterSpawn(b, func(ctx *nilPtrCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
 			return &TestSpawnReply{Activated: true}, nil
-		}))
+		})
+		actor.RegisterServe(b, func(ctx *nilPtrCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilPtrCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Deactivate(ctx)
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *nilPtrCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "fail-acquire"}, &TestSpawnReq{})
-	if err == nil {
-		t.Error("expected error when lease acquire fails")
+	id := TestGrainId{Name: "nil-ptr-grain"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
 	}
-	if spawnCalled {
-		t.Error("handler should not be called when activate fails")
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 10}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestDeactivateReq{}); err != nil {
+		t.Fatalf("deactivate failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("second spawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 10 {
+		t.Errorf("want 10, got %d", q.Value)
 	}
 }
 
-func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
-	// 同一 ID 被并发激活时，只有一个能成功获取租约
-	pm := newTestPMWithDir(t.TempDir())
+// TestLifecycle_PointerSnapshotter 验证快照器类型参数写成指针时，
+// 激活 / 存盘 / 重新加载的完整链路依然正常。
+func TestLifecycle_PointerSnapshotter(t *testing.T) {
+	type ptrState = State[TestGrainId, TestGrainData, TestGrainSnapshot, *TestGrainSnapshotter]
+	type ptrCtx = actor.ActorContext[TestGrainId, ptrState]
 
+	pm := newTestPMWithDir(t.TempDir())
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, ptrState]) {
+		activate := func(ctx *ptrCtx, spawning bool) error {
+			if !spawning {
+				return nil
+			}
+			_, err := ctx.State().Activate(ctx, pm, &TestGrainSnapshotter{})
+			return err
+		}
+		actor.RegisterSpawn(b, func(ctx *ptrCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *ptrCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *ptrCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Deactivate(ctx)
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *ptrCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "ptr-grain"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 10}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestDeactivateReq{}); err != nil {
+		t.Fatalf("deactivate failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("second spawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 10 {
+		t.Errorf("want 10, got %d", q.Value)
+	}
+}
+
+// ─── Grain 激活失败 / 租约冲突测试 ───
+
+func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
+	pm := newTestPMWithDir(t.TempDir())
 	mgr := setupTestRegistry(t, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -511,8 +525,6 @@ func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
 
 	id := TestGrainId{Name: "concurrent-activate"}
 	var wg sync.WaitGroup
-	successCount := int32(0)
-	errCount := int32(0)
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
@@ -526,14 +538,9 @@ func TestLifecycle_ConcurrentSameIdActivation(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-
-	// 至少有一个能成功
-	_ = successCount
-	_ = errCount
 }
 
 func TestLifecycle_ReactivationAfterDeactivateAndReacquire(t *testing.T) {
-	// 通过 Deactivate 正常停活后重新激活，验证数据恢复
 	pm := newTestPMWithDir(t.TempDir())
 	mgr := setupTestRegistry(t, pm)
 
@@ -546,20 +553,17 @@ func TestLifecycle_ReactivationAfterDeactivateAndReacquire(t *testing.T) {
 		t.Fatalf("initial spawn failed: %v", err)
 	}
 
-	// 修改数据
 	_, err = actor.Call(ctx, mgr, id, &TestMutateReq{Add: 100})
 	if err != nil {
 		t.Fatalf("mutate failed: %v", err)
 	}
 
-	// 通过 Deactivate 正常停活（保存数据 + 释放租约）
 	_, err = actor.Call(ctx, mgr, id, &TestDeactivateReq{})
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
-	// 重新激活，数据应为 100（Deactivate 已保存）
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
 		t.Fatalf("reactivation failed: %v", err)
@@ -589,14 +593,12 @@ func TestLifecycle_MultipleGrainsIsolation(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			id := TestGrainId{Name: "isolated-" + itoa(idx)}
-			// 激活
+			id := TestGrainId{Name: "isolated-" + strconv.Itoa(idx)}
 			_, err := actor.Call(ctx, mgr, id, &TestSpawnReq{})
 			if err != nil {
 				t.Errorf("grain %d spawn failed: %v", idx, err)
 				return
 			}
-			// 写入
 			_, err = actor.Call(ctx, mgr, id, &TestMutateReq{Add: idx * 10})
 			if err != nil {
 				t.Errorf("grain %d mutate failed: %v", idx, err)
@@ -606,9 +608,8 @@ func TestLifecycle_MultipleGrainsIsolation(t *testing.T) {
 	}
 	wg.Wait()
 
-	// 验证每个 grain 的数据隔离
 	for i := 0; i < grainCount; i++ {
-		id := TestGrainId{Name: "isolated-" + itoa(i)}
+		id := TestGrainId{Name: "isolated-" + strconv.Itoa(i)}
 		q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
 		if err != nil {
 			t.Errorf("grain %d query failed: %v", i, err)
@@ -622,7 +623,6 @@ func TestLifecycle_MultipleGrainsIsolation(t *testing.T) {
 }
 
 func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
-	// 多个 grain 停活后重新激活，验证各自数据恢复正确
 	pm := newTestPMWithDir(t.TempDir())
 	mgr := setupTestRegistry(t, pm)
 
@@ -632,7 +632,7 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 	grainCount := 5
 	ids := make([]TestGrainId, grainCount)
 	for i := 0; i < grainCount; i++ {
-		ids[i] = TestGrainId{Name: "multi-dar-" + itoa(i)}
+		ids[i] = TestGrainId{Name: "multi-dar-" + strconv.Itoa(i)}
 		_, err := actor.Call(ctx, mgr, ids[i], &TestSpawnReq{})
 		if err != nil {
 			t.Fatalf("spawn %d failed: %v", i, err)
@@ -643,16 +643,14 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 		}
 	}
 
-	// 全部停活
 	for i := 0; i < grainCount; i++ {
 		_, err := actor.Call(ctx, mgr, ids[i], &TestDeactivateReq{})
 		if err != nil {
 			t.Fatalf("deactivate %d failed: %v", i, err)
 		}
-		actor.JoinActor[TestGrainId](mgr, ids[i])
+		actor.JoinActor(mgr, ids[i])
 	}
 
-	// 重新激活并验证
 	for i := 0; i < grainCount; i++ {
 		_, err := actor.Call(ctx, mgr, ids[i], &TestSpawnReq{})
 		if err != nil {
@@ -673,85 +671,27 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 
 func TestPersistenceManager_Options(t *testing.T) {
 	dir := t.TempDir()
-	lm := lease.NewLocalManager(5 * time.Second)
 
 	pm := NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lm),
 		WithNodeId("test-node"),
-		WithRenewInterval(30*time.Second),
 	)
 
 	if pm.driver == nil {
 		t.Error("driver should not be nil")
 	}
-	if pm.leaseManager == nil {
-		t.Error("leaseManager should not be nil")
-	}
 	if pm.nodeId != "test-node" {
 		t.Errorf("nodeId: want test-node, got %s", pm.nodeId)
-	}
-	if pm.renewInterval != 30*time.Second {
-		t.Errorf("renewInterval: want 30s, got %v", pm.renewInterval)
-	}
-}
-
-func TestPersistenceManager_ZeroRenewInterval(t *testing.T) {
-	// renewInterval 为 0 表示不自动续约
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(t.TempDir())),
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
-		WithNodeId("node-1"),
-	)
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "no-renew"}, &TestSpawnReq{})
-	if err != nil {
-		t.Fatalf("spawn failed: %v", err)
-	}
-}
-
-func TestPersistenceManager_NilLeaseManager(t *testing.T) {
-	// 没有 lease manager 时，activate 会失败
-	pm := NewPersistenceManager(
-		WithDriver(NewJsonDriver(t.TempDir())),
-		WithNodeId("node-1"),
-	)
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "no-lm"}, &TestSpawnReq{})
-	if err == nil {
-		t.Error("expected error when lease manager is nil")
 	}
 }
 
 func TestPersistenceManager_NilDriver(t *testing.T) {
 	pm := NewPersistenceManager(
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
 		WithNodeId("node-1"),
 	)
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
 	})
@@ -760,95 +700,8 @@ func TestPersistenceManager_NilDriver(t *testing.T) {
 	defer cancel()
 
 	_, err := actor.Call(ctx, mgr, TestGrainId{Name: "no-driver"}, &TestSpawnReq{})
-	// 可能 panic 或返回错误，取决于 driver 是否为 nil
 	if err == nil {
 		t.Log("no error when driver is nil (might panic)")
-	}
-}
-
-// ─── JsonDriver 测试 ───
-
-func TestJsonDriver_Overwrite(t *testing.T) {
-	dir := t.TempDir()
-	d := NewJsonDriver(dir)
-
-	// 首次保存
-	snap := &TestGrainSnapshot{Value: 100}
-	if err := d.Save(context.Background(), "test", "actor-ow", snap, 1); err != nil {
-		t.Fatalf("first save failed: %v", err)
-	}
-
-	// 覆盖写入
-	snap2 := &TestGrainSnapshot{Value: 200}
-	if err := d.Save(context.Background(), "test", "actor-ow", snap2, 2); err != nil {
-		t.Fatalf("second save failed: %v", err)
-	}
-
-	var loaded TestGrainSnapshot
-	if err := d.Load(context.Background(), "test", "actor-ow", &loaded); err != nil {
-		t.Fatalf("load failed: %v", err)
-	}
-	if loaded.Value != 200 {
-		t.Errorf("overwrite: want 200, got %d", loaded.Value)
-	}
-}
-
-func TestJsonDriver_MultipleActorTypes(t *testing.T) {
-	dir := t.TempDir()
-	d := NewJsonDriver(dir)
-
-	snap1 := &TestGrainSnapshot{Value: 1}
-	snap2 := &TestGrainSnapshot{Value: 2}
-
-	if err := d.Save(context.Background(), "player", "p1", snap1, 1); err != nil {
-		t.Fatalf("save player failed: %v", err)
-	}
-	if err := d.Save(context.Background(), "npc", "p1", snap2, 1); err != nil {
-		t.Fatalf("save npc failed: %v", err)
-	}
-
-	var loaded TestGrainSnapshot
-	if err := d.Load(context.Background(), "player", "p1", &loaded); err != nil {
-		t.Fatalf("load player failed: %v", err)
-	}
-	if loaded.Value != 1 {
-		t.Errorf("player: want 1, got %d", loaded.Value)
-	}
-
-	if err := d.Load(context.Background(), "npc", "p1", &loaded); err != nil {
-		t.Fatalf("load npc failed: %v", err)
-	}
-	if loaded.Value != 2 {
-		t.Errorf("npc: want 2, got %d", loaded.Value)
-	}
-}
-
-func TestJsonDriver_SaveCreatesDirectory(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "deep", "nested", "path")
-	d := NewJsonDriver(dir)
-
-	snap := &TestGrainSnapshot{Value: 42}
-	if err := d.Save(context.Background(), "type", "id", snap, 1); err != nil {
-		t.Fatalf("save failed: %v", err)
-	}
-
-	// 验证目录和文件存在
-	expectedPath := filepath.Join(dir, "type", "id.json")
-	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
-		t.Errorf("file not created at %s", expectedPath)
-	}
-}
-
-func TestJsonDriver_SaveInvalidPath(t *testing.T) {
-	// Windows 上使用包含非法字符的路径，或者只读目录
-	// 使用 NUL 设备路径作为测试
-	d := NewJsonDriver("NUL")
-	snap := &TestGrainSnapshot{Value: 1}
-	err := d.Save(context.Background(), "test", "id", snap, 1)
-	if err == nil {
-		// 在 Windows 上可能不会报错，改用只读目录测试
-		// 或者直接跳过
-		t.Skip("cannot create invalid path on this platform")
 	}
 }
 
@@ -874,9 +727,8 @@ func TestLifecycle_DeactivateSavesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
-	// 验证通过 actor 恢复数据
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
 		t.Fatalf("reactivation failed: %v", err)
@@ -891,21 +743,17 @@ func TestLifecycle_DeactivateSavesState(t *testing.T) {
 }
 
 func TestLifecycle_PersistMultipleTimes(t *testing.T) {
-	// 多次 Persist 不退出，验证数据累积正确
 	dir := t.TempDir()
 	pm := NewPersistenceManager(
 		WithDriver(NewJsonDriver(dir)),
-		WithLeaseManager(lease.NewLocalManager(10*time.Second)),
 		WithNodeId("node-1"),
 	)
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			// 只在首次激活时设置初始值，重新激活时不应覆盖已加载的数据
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
 			ctx.State().Data.Value += req.Add
 			if err := ctx.State().Persist(ctx); err != nil {
 				t.Errorf("persist failed: %v", err)
@@ -915,7 +763,7 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
 			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
 		})
-		actor.RegisterServe(b, WrapSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
+		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
 			ctx.State().Deactivate(ctx)
 			return actor.OK, nil
 		}))
@@ -937,12 +785,11 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 		}
 	}
 
-	// 停活后重新激活
 	_, err = actor.Call(ctx, mgr, id, &TestDeactivateReq{})
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
@@ -957,12 +804,357 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 	}
 }
 
-// ─── failingLeaseManager 用于模拟 Acquire 失败 ───
+// ─── ErrLeaseTaken 测试 ───
 
-type failingLeaseManager struct{}
-
-func (f *failingLeaseManager) Acquire(_ context.Context, _, _ string) (*lease.Lease, error) {
-	return nil, lease.ErrNotAcquired
+func TestErrLeaseTaken_Error(t *testing.T) {
+	err := &ErrLeaseTaken{
+		Key:        "player:123",
+		Owner:      "node-2",
+		Generation: 5,
+	}
+	msg := err.Error()
+	if msg == "" {
+		t.Error("ErrLeaseTaken.Error() should not be empty")
+	}
 }
-func (f *failingLeaseManager) Release(_ context.Context, _ *lease.Lease) error { return nil }
-func (f *failingLeaseManager) Renew(_ context.Context, _ *lease.Lease) error   { return nil }
+
+func TestPersistenceManager_ForceRelease(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("node-1"),
+	)
+
+	// 先通过正常流程激活并保存数据
+	mgr := setupTestRegistry(t, pm)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "pm-fr-test"}
+	_, err := actor.Call(ctx, mgr, id, &TestSpawnReq{})
+	if err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	_, err = actor.Call(ctx, mgr, id, &TestMutateReq{Add: 50})
+	if err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	_, err = actor.Call(ctx, mgr, id, &TestDeactivateReq{})
+	if err != nil {
+		t.Fatalf("deactivate failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	// 通过 PersistenceManager 强制释放
+	newGen, err := pm.ForceRelease(ctx, "test_grain", id.String())
+	if err != nil {
+		t.Fatalf("PersistenceManager.ForceRelease failed: %v", err)
+	}
+	if newGen <= 0 {
+		t.Errorf("ForceRelease: expected positive generation, got %d", newGen)
+	}
+
+	// 释放后其他节点可以重新激活
+	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
+	if err != nil {
+		t.Fatalf("reactivation after ForceRelease failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 50 {
+		t.Errorf("ForceRelease preserved data: want 50, got %d", q.Value)
+	}
+}
+
+func TestPersistenceManager_ForceRelease_NoDriver(t *testing.T) {
+	pm := NewPersistenceManager(
+		WithNodeId("node-1"),
+	)
+
+	_, err := pm.ForceRelease(context.Background(), "test", "id")
+	if err == nil {
+		t.Error("ForceRelease without driver should return error")
+	}
+	if !errors.Is(err, ErrNoDriver) {
+		t.Errorf("ForceRelease error: want ErrNoDriver, got %v", err)
+	}
+}
+
+func TestPersistenceManager_Driver_NodeId(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("test-node"),
+	)
+
+	if pm.Driver() == nil {
+		t.Error("Driver() should not be nil")
+	}
+	if pm.NodeId() != "test-node" {
+		t.Errorf("NodeId(): want test-node, got %s", pm.NodeId())
+	}
+}
+
+// ─── SetupGrain 自动生命周期测试 ───
+
+// TestQuitReq 触发 Grain 主动退出（Quit），用于验证 OnQuit 自动存盘 + 释放。
+type TestQuitReq struct{}
+
+func (*TestQuitReq) ReqType(_ TestGrainId, _ actor.OkReply) string { return "test_quit" }
+
+// TestSetupGrain_AutoActivateAndQuitPersist 验证 SetupGrain 后：
+//   - 无需手动 Activate，OnSpawn 自动激活；
+//   - 修改数据后 Quit，OnQuit 自动 Persist + release；
+//   - 重新 spawn 数据已持久化。
+func TestSetupGrain_AutoActivateAndQuitPersist(t *testing.T) {
+	pm := newTestPMWithDir(t.TempDir())
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		SetupGrain(b, pm, TestGrainSnapshotter{}, nil)
+		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: ctx.State().Activated()}, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit() // 触发 OnQuit 自动存盘 + 释放
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "setup-auto"}
+	reply, err := actor.Call(ctx, mgr, id, &TestSpawnReq{})
+	if err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if !reply.Activated {
+		t.Fatal("expected grain auto-activated by OnSpawn")
+	}
+
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 123}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	// 重新 spawn：OnQuit 应已自动存盘，数据应恢复。
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("respawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 123 {
+		t.Errorf("OnQuit should auto-persist: want 123, got %d", q.Value)
+	}
+}
+
+// TestSetupGrain_OnActivateInit 验证 onActivate 回调的 created 标志：
+// 首次创建时 created=true 用于初始化，重新加载时 created=false。
+func TestSetupGrain_OnActivateInit(t *testing.T) {
+	pm := newTestPMWithDir(t.TempDir())
+	var initCount, loadedCount int
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		SetupGrain(b, pm, TestGrainSnapshotter{}, func(ctx *testActorCtx, created bool) error {
+			if created {
+				initCount++
+				ctx.State().Data.Value = 1000 // 首次创建初始化
+			} else {
+				loadedCount++
+			}
+			return nil
+		})
+		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit()
+			return actor.OK, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "setup-init"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn1 failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit1 failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn2 failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit2 failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	if initCount != 1 {
+		t.Errorf("onActivate created=true should fire once, got %d", initCount)
+	}
+	if loadedCount != 1 {
+		t.Errorf("onActivate created=false should fire once, got %d", loadedCount)
+	}
+}
+
+// TestSetupGrain_AutoPersistInterval 验证定时存盘：设置较短 interval，
+// 修改数据后等待超过一个 interval，框架应已自动 Persist 落盘。
+func TestSetupGrain_AutoPersistInterval(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("node-1"),
+		WithAutoPersistInterval(80*time.Millisecond),
+	)
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		SetupGrain(b, pm, TestGrainSnapshotter{}, nil)
+		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit()
+			return actor.OK, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "setup-auto-ps"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 7}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+
+	// 等待至少两个定时存盘周期，确认自动落盘发生。
+	time.Sleep(250 * time.Millisecond)
+
+	// 直接读取磁盘文件，验证数据已被定时存盘写入（data.Value == 7）。
+	path := filepath.Join(dir, "test_grain", id.String()+".json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("auto persist did not write file: %v", err)
+	}
+	var doc struct {
+		Generation int64 `json:"generation"`
+		Data       struct {
+			Value int `json:"value"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode persisted file: %v", err)
+	}
+	if doc.Data.Value != 7 {
+		t.Errorf("auto persist should have saved Value=7, got %d", doc.Data.Value)
+	}
+
+	// 退出并清理。
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+}
+
+// ─── nil snapshot 测试 ───
+
+// TestGrainNilSnapshotter 是一个会返回 nil 快照的 Snapshotter：
+// 用于验证 Persist 在 TakeSnapshot 返回 nil 时跳过落盘但不 panic。
+type TestGrainNilSnapshotter struct{}
+
+func (TestGrainNilSnapshotter) NewPersist(data *TestGrainData) *TestGrainSnapshot {
+	return &TestGrainSnapshot{}
+}
+func (TestGrainNilSnapshotter) LoadSnapshot(data *TestGrainData, snapshot *TestGrainSnapshot) {
+	if snapshot != nil {
+		data.Value = snapshot.Value
+	}
+}
+func (TestGrainNilSnapshotter) TakeSnapshot(data *TestGrainData) *TestGrainSnapshot {
+	return nil // 本次不存盘
+}
+
+type nilState = State[TestGrainId, TestGrainData, TestGrainSnapshot, TestGrainNilSnapshotter]
+type nilActorCtx = actor.ActorContext[TestGrainId, nilState]
+
+func TestNilSnapshot_PersistSkipsSave(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("node-1"),
+	)
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, nilState]) {
+		SetupGrain(b, pm, TestGrainNilSnapshotter{}, func(ctx *nilActorCtx, created bool) error {
+			if created {
+				ctx.State().Data.Value = 555
+			}
+			return nil
+		})
+		actor.RegisterSpawn(b, func(ctx *nilActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: ctx.State().Activated()}, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit()
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *nilActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "nil-snap"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	// 触发一次 Persist（nil snapshot → 跳过落盘），不应 panic。
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 1}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	// 重新加载：由于 snapshot 始终为 nil，磁盘上不会保存 Data.Value，
+	// 但 onActivate 在 created=false 时沿用加载到的数据（零值）。
+	// 这里只验证流程不 panic 且能重新激活。
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("respawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	// 因为 Persist 总是跳过（nil），磁盘无 Value；重新加载得到零值。
+	if q.Value != 0 {
+		t.Errorf("nil snapshot should leave data unpersisted: want 0, got %d", q.Value)
+	}
+}

@@ -24,7 +24,7 @@ go version
 go test ./...
 
 # Run examples
-go run ./cmd/example/
+go run ./cmd/actor_example/
 go run ./cmd/rpc_example/
 go run ./cmd/grain_example/
 

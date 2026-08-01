@@ -28,6 +28,9 @@ jobs:
       - name: Build
         run: go build -v ./...
 
+      - name: Verify README examples are up to date
+        run: go run ./cmd/readmegen -check -root .
+
       - name: Run tests
         run: go test -v -race -count=1 ./...
 
