@@ -70,6 +70,21 @@ func (a *ActorContext[A, S]) Quit() {
 	a.idle = true
 }
 
+// Ref 获取对同类型另一个 Actor 的直连引用，绕过 Group 查找。
+// 只能查找同 Group（同 ActorType）中已存在的 Actor，不会 spawn。
+// 返回的 ActorRef 持有目标 Actor 的引用计数，使用完毕后需调用 Release() 释放。
+// 若目标不存在或已关闭，返回 nil。
+func (a *ActorContext[A, S]) Ref(id A) *ActorRef[A, S] {
+	target := a.actor.g.holdActorForRef(id)
+	if target == nil {
+		return nil
+	}
+	return &ActorRef[A, S]{
+		target: target,
+		mgr:    a.actor.g.mgr,
+	}
+}
+
 type ContextTimer struct {
 	canceled atomic.Bool
 	timer    *time.Timer

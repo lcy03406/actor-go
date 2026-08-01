@@ -29,6 +29,7 @@ type group[A ActorId, S anyState] struct {
 	mu       sync.RWMutex
 	stopping atomic.Bool
 	logger   *slog.Logger
+	mgr      *Manager
 	registry map[string]handler[A]
 	actors   map[A]*actorRuntime[A, S]
 	idle     atomic.Int32
@@ -43,6 +44,7 @@ func newGroup[A ActorId, S any](m *Manager, registry map[string]handler[A], capa
 		cancel:   cancel,
 		capacity: capacity,
 		logger:   logger,
+		mgr:      m,
 		registry: registry,
 		actors:   make(map[A]*actorRuntime[A, S]),
 	}
@@ -58,6 +60,19 @@ func (g *group[A, S]) isStopping() bool {
 }
 
 func (g *group[A, S]) holdActor(id A) *actorRuntime[A, S] {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	a := g.actors[id]
+	if a == nil || a.closed.Load() {
+		return nil
+	}
+	a.hold()
+	return a
+}
+
+// holdActorForRef 在读锁内 hold 目标 Actor，返回用于构造 ActorRef 的运行时句柄。
+// 调用方负责在 ActorRef.Release() 中 unhold。
+func (g *group[A, S]) holdActorForRef(id A) *actorRuntime[A, S] {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	a := g.actors[id]
