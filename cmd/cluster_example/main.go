@@ -30,6 +30,8 @@
 //	chat <ch> <msg>     - 发送聊天消息（仅 chat-server / all-in-one）
 //	info                - 显示集群拓扑信息
 //	status              - 显示本地节点信息
+//	migrate join <type> <addr>  - 模拟节点加入，触发 Actor 迁移
+//	migrate leave <id>          - 模拟节点离开，触发 Actor 迁移
 //	quit                - 退出
 package main
 
@@ -44,6 +46,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -119,6 +122,34 @@ type ClosePlayer struct{}
 
 func (*ClosePlayer) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 
+// CheckOwnership 是节点迁移的核心消息。
+// 当集群拓扑变化时，MigrationCoordinator 会广播此消息，
+// 每个 Actor 在 handler 中检查自己是否还应留在当前节点。
+type CheckOwnership struct{}
+
+func (*CheckOwnership) ReqType(_ PlayerId, _ actor.OkReply) string { return "CheckOwnership" }
+
+// RoomCheckOwnership Room Actor 的迁移检查消息
+type RoomCheckOwnership struct{}
+
+func (*RoomCheckOwnership) ReqType(_ RoomId, _ actor.OkReply) string { return "CheckOwnership" }
+
+// ChatCheckOwnership Chat Actor 的迁移检查消息
+type ChatCheckOwnership struct{}
+
+func (*ChatCheckOwnership) ReqType(_ ChatId, _ actor.OkReply) string { return "CheckOwnership" }
+
+// PlayerStateReply 返回 Player 的当前状态
+type PlayerStateReq struct{}
+
+type PlayerStateReply struct {
+	HP    int  `json:"hp"`
+	Level int  `json:"level"`
+	Owned bool `json:"owned"` // 是否由当前节点拥有
+}
+
+func (*PlayerStateReq) ReqType(_ PlayerId, _ *PlayerStateReply) string { return "PlayerState" }
+
 // --- Room ---
 type CreateRoom struct {
 	MaxPlayers int `json:"maxPlayers"`
@@ -167,6 +198,9 @@ var groupMapping = cluster.GroupMapping{
 
 // nodeId 全局节点 ID（由命令行参数构建）
 var nodeId string
+
+// globalMembership 全局动态成员管理器，用于模拟节点加入/离开
+var globalMembership *dynamicMembership
 
 // ─── main ───
 
@@ -236,6 +270,12 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 				ctx.Quit()
 				return actor.OK, nil
 			})
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *PlayerStateReq, _ bool) (*PlayerStateReply, error) {
+				return &PlayerStateReply{
+					HP:    ctx.State().HP,
+					Level: ctx.State().Level,
+				}, nil
+			})
 		})
 	}
 	if nodeType == "room-server" || nodeType == "all-in-one" {
@@ -267,6 +307,7 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 			rpc.RegisterRequest(b, &Attack{})
 			rpc.RegisterRequest(b, &Heal{})
 			rpc.RegisterRequest(b, &ClosePlayer{})
+			rpc.RegisterRequest(b, &PlayerStateReq{})
 		}
 		if nodeType == "room-server" || nodeType == "all-in-one" {
 			rpc.RegisterRequest(b, &CreateRoom{})
@@ -302,11 +343,40 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 		}
 	}
 
-	mem := newStaticMembership(self, members...)
+	mem := newDynamicMembership(self, members...)
+	globalMembership = mem // 保存全局引用，供 migrate 命令使用
 	placement := cluster.NewConsistentHashPlacement(128).WithGroupMapping(groupMapping)
 	router := cluster.NewRouter[JsonMsg, JsonC, JsonT](mem, placement, mgr)
 
-	log.Printf("节点已启动: %s (%s) 监听 %s, 成员 %d", id, nodeType, addr, len(members))
+	// ─── 节点迁移支持 ───
+	// 初始化 MigrationCoordinator，监听集群拓扑变化
+	coord := cluster.NewMigrationCoordinator(mgr, placement, mem)
+
+	// 注册各 Actor Group 的 CheckOwnership handler 和通知回调
+	if nodeType == "player-server" || nodeType == "all-in-one" {
+		// 延迟注册 CheckOwnership handler（需要在 Serve 之后）
+		registerPlayerMigrationHandlers(mgr, placement, mem)
+		coord.RegisterNotify(func() {
+			actor.Broadcast[PlayerId](mgr, &CheckOwnership{})
+		})
+	}
+	if nodeType == "room-server" || nodeType == "all-in-one" {
+		registerRoomMigrationHandlers(mgr, placement, mem)
+		coord.RegisterNotify(func() {
+			actor.Broadcast[RoomId](mgr, &RoomCheckOwnership{})
+		})
+	}
+	if nodeType == "chat-server" || nodeType == "all-in-one" {
+		registerChatMigrationHandlers(mgr, placement, mem)
+		coord.RegisterNotify(func() {
+			actor.Broadcast[ChatId](mgr, &ChatCheckOwnership{})
+		})
+	}
+
+	// 启动迁移协调器
+	go coord.Run(ctx, mem.Events())
+
+	log.Printf("节点已启动: %s (%s) 监听 %s, 成员 %d, 迁移协调器已启用", id, nodeType, addr, len(members))
 	return router
 }
 
@@ -325,23 +395,155 @@ func inferTypeFromAddr(addr string) string {
 	return "player-server"
 }
 
-// ─── StaticMembership ───
+// ─── DynamicMembership（支持动态节点加入/离开） ───
 
-type staticMembership struct {
+type dynamicMembership struct {
+	mu      sync.Mutex
 	self    cluster.Node
 	members cluster.NodeSet
+	events  chan cluster.MemberEvent
 }
 
-func newStaticMembership(self cluster.Node, members ...cluster.Node) *staticMembership {
-	return &staticMembership{self: self, members: cluster.NodeSet(members)}
+func newDynamicMembership(self cluster.Node, members ...cluster.Node) *dynamicMembership {
+	return &dynamicMembership{
+		self:    self,
+		members: cluster.NodeSet(members),
+		events:  make(chan cluster.MemberEvent, 100),
+	}
 }
 
-func (s *staticMembership) Self() cluster.Node                 { return s.self }
-func (s *staticMembership) Members() cluster.NodeSet           { return s.members }
-func (s *staticMembership) Events() <-chan cluster.MemberEvent { return nil }
-func (s *staticMembership) Join(seeds []string) error          { return nil }
-func (s *staticMembership) Leave() error                       { return nil }
-func (s *staticMembership) Close() error                       { return nil }
+func (d *dynamicMembership) Self() cluster.Node {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.self
+}
+
+func (d *dynamicMembership) Members() cluster.NodeSet {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	result := make(cluster.NodeSet, len(d.members))
+	copy(result, d.members)
+	return result
+}
+
+func (d *dynamicMembership) Events() <-chan cluster.MemberEvent {
+	return d.events
+}
+
+func (d *dynamicMembership) Join(seeds []string) error { return nil }
+func (d *dynamicMembership) Leave() error              { return nil }
+func (d *dynamicMembership) Close() error              { return nil }
+
+// AddNode 模拟节点加入集群，触发 MemberJoined 事件。
+func (d *dynamicMembership) AddNode(n cluster.Node) {
+	d.mu.Lock()
+	// 检查是否已存在
+	for _, m := range d.members {
+		if m.ID == n.ID {
+			d.mu.Unlock()
+			return
+		}
+	}
+	d.members = append(d.members, n)
+	membersCopy := make(cluster.NodeSet, len(d.members))
+	copy(membersCopy, d.members)
+	d.mu.Unlock()
+
+	d.events <- cluster.MemberEvent{
+		Type:  cluster.MemberJoined,
+		Node:  n,
+		Nodes: membersCopy,
+	}
+}
+
+// RemoveNode 模拟节点离开集群，触发 MemberLeft 事件。
+func (d *dynamicMembership) RemoveNode(nodeID string) {
+	d.mu.Lock()
+	var removed cluster.Node
+	newMembers := make(cluster.NodeSet, 0, len(d.members))
+	for _, m := range d.members {
+		if m.ID == nodeID {
+			removed = m
+		} else {
+			newMembers = append(newMembers, m)
+		}
+	}
+	if removed.ID == "" {
+		d.mu.Unlock()
+		return
+	}
+	d.members = newMembers
+	d.mu.Unlock()
+
+	d.events <- cluster.MemberEvent{
+		Type:  cluster.MemberLeft,
+		Node:  removed,
+		Nodes: newMembers,
+	}
+}
+
+// ─── 迁移 Handler 注册 ───
+
+func registerPlayerMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
+	// 注册 CheckOwnership handler 到已存在的 Player group
+	// 注意：这里使用 Post + 空 ActorId 的方式无法直接注册到已有 group，
+	// 所以通过 serve 的方式，manager 内部会找到对应 group 并注册 handler。
+	// 实际上 Serve 已经在 startNode 中调用过了，这里需要额外的 handler 注册方式。
+	// 我们利用一个临时的 Actor 来触发 handler 查找：
+	// 实际上 RegisterServe 是通过 RegistryBuilder 调用的，这里改用直接方式。
+	// 因为 Serve 已经调用过了，我们需要在已有 group 上添加 handler。
+	// 最简单的方式是用一个新的 Serve 调用（会追加 handler 到已有 group）。
+	actor.Serve(mgr, 0, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+		actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *CheckOwnership, _ bool) (actor.OkReply, error) {
+			selfID := mem.Self().ID
+			members := mem.Members()
+			target, leave := cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())
+			if leave {
+				log.Printf("[迁移] Player %s 应迁移到 %s, 当前 HP=%d Level=%d",
+					ctx.Id().String(), target, ctx.State().HP, ctx.State().Level)
+				// 实际场景中应调用 Deactivate 释放租约
+				// ctx.State().Deactivate()
+			} else {
+				log.Printf("[迁移] Player %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
+			}
+			return actor.OK, nil
+		})
+	})
+}
+
+func registerRoomMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
+	actor.Serve(mgr, 0, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
+		actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *RoomCheckOwnership, _ bool) (actor.OkReply, error) {
+			selfID := mem.Self().ID
+			members := mem.Members()
+			target, leave := cluster.CheckOwnership(placement, members, selfID, "Room", ctx.Id().String())
+			if leave {
+				log.Printf("[迁移] Room %s 应迁移到 %s, 当前 MaxPlayers=%d",
+					ctx.Id().String(), target, ctx.State().MaxPlayers)
+			} else {
+				log.Printf("[迁移] Room %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
+			}
+			return actor.OK, nil
+		})
+	})
+}
+
+func registerChatMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
+	actor.Serve(mgr, 0, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
+		actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *ChatCheckOwnership, _ bool) (actor.OkReply, error) {
+			selfID := mem.Self().ID
+			members := mem.Members()
+			target, leave := cluster.CheckOwnership(placement, members, selfID, "Chat", ctx.Id().String())
+			if leave {
+				log.Printf("[迁移] Chat %s 应迁移到 %s, 消息数=%d",
+					ctx.Id().String(), target, len(ctx.State().Messages))
+			} else {
+				log.Printf("[迁移] Chat %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
+			}
+			return actor.OK, nil
+		})
+	})
+}
 
 // ─── Banner ───
 
@@ -377,6 +579,8 @@ func printBanner(nodeType, addr string, router *Router) {
 	}
 	fmt.Println("║    info               - 集群拓扑                       ║")
 	fmt.Println("║    status             - 节点信息                       ║")
+	fmt.Println("║    migrate join <t> <a> - 模拟节点加入，触发迁移       ║")
+	fmt.Println("║    migrate leave <id>   - 模拟节点离开，触发迁移       ║")
 	fmt.Println("║    quit               - 退出                           ║")
 	fmt.Println("╚══════════════════════════════════════════════════════╝")
 	fmt.Println()
@@ -496,13 +700,20 @@ func repl(ctx context.Context, router *Router) {
 		case "status":
 			printStatus(router)
 
+		case "migrate":
+			if len(args) < 1 {
+				fmt.Println("用法: migrate join <nodeType> <addr>  或  migrate leave <nodeId>")
+				break
+			}
+			handleMigrate(args, router)
+
 		case "quit", "exit":
 			fmt.Println("再见!")
 			os.Exit(0)
 
 		default:
 			fmt.Printf("未知命令: %s\n", cmd)
-			fmt.Println("可用命令: login, attack, heal, room, roominfo, chat, info, status, quit")
+			fmt.Println("可用命令: login, attack, heal, room, roominfo, chat, info, status, migrate, quit")
 		}
 
 		fmt.Print("> ")
@@ -562,4 +773,69 @@ func printStatus(router *Router) {
 		fmt.Printf("    %s: 本地 %d/10\n", at, local)
 	}
 	fmt.Println("───────────────────────────────────────────────────────")
+}
+
+// ─── 迁移命令处理 ───
+
+func handleMigrate(args []string, router *Router) {
+	if globalMembership == nil {
+		fmt.Println("错误: 当前 Membership 不支持动态变更")
+		return
+	}
+
+	subCmd := strings.ToLower(args[0])
+
+	switch subCmd {
+	case "join":
+		if len(args) < 3 {
+			fmt.Println("用法: migrate join <nodeType> <addr>")
+			fmt.Println("示例: migrate join player-server localhost:8005")
+			return
+		}
+		nodeType := args[1]
+		addr := args[2]
+		nodeID := fmt.Sprintf("%s-%s", nodeType, addr)
+
+		n := cluster.Node{
+			ID:   nodeID,
+			Addr: addr,
+			Type: nodeType,
+		}
+
+		fmt.Printf(">>> 模拟节点加入: %s (类型=%s, 地址=%s)\n", nodeID, nodeType, addr)
+		globalMembership.AddNode(n)
+
+		// 等待迁移协调器处理
+		time.Sleep(300 * time.Millisecond)
+
+		fmt.Println(">>> 节点加入完成，查看 info 确认集群拓扑变化")
+		fmt.Println(">>> 注意观察日志中的 [迁移] 信息，了解哪些 Actor 应迁移到新节点")
+
+	case "leave":
+		if len(args) < 2 {
+			fmt.Println("用法: migrate leave <nodeId>")
+			fmt.Println("示例: migrate leave player-server-localhost:8005")
+			return
+		}
+		nodeID := args[1]
+
+		// 不允许移除自己
+		if nodeID == router.Self().ID {
+			fmt.Println("错误: 不能移除当前节点自身，请在其他节点上执行此操作")
+			return
+		}
+
+		fmt.Printf(">>> 模拟节点离开: %s\n", nodeID)
+		globalMembership.RemoveNode(nodeID)
+
+		// 等待迁移协调器处理
+		time.Sleep(300 * time.Millisecond)
+
+		fmt.Println(">>> 节点离开完成，查看 info 确认集群拓扑变化")
+		fmt.Println(">>> 注意观察日志中的 [迁移] 信息，了解 Actor 重新分配情况")
+
+	default:
+		fmt.Printf("未知的 migrate 子命令: %s\n", subCmd)
+		fmt.Println("可用子命令: join, leave")
+	}
 }
