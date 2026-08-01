@@ -12,54 +12,7 @@ import (
 	"github.com/lcy03406/actor-go/rpc"
 )
 
-// ─── Cluster 拓扑层 ───
-
-// Cluster 是集群管理器，组合 Membership 和 Placement。
-// 提供节点拓扑信息，不涉及传输和路由决策。
-type Cluster struct {
-	membership Membership
-	placement  PlacementStrategy
-	self       Node
-}
-
-// New 创建一个新的 Cluster 实例。
-func New(membership Membership, placement PlacementStrategy) *Cluster {
-	return &Cluster{
-		membership: membership,
-		placement:  placement,
-		self:       membership.Self(),
-	}
-}
-
-// Self 返回本地节点信息。
-func (c *Cluster) Self() Node {
-	return c.self
-}
-
-// Members 返回当前集群成员列表。
-func (c *Cluster) Members() NodeSet {
-	return c.membership.Members()
-}
-
-// Events 返回成员变更事件 channel。
-func (c *Cluster) Events() <-chan MemberEvent {
-	return c.membership.Events()
-}
-
-// Place 返回指定 Actor 的偏好节点。
-func (c *Cluster) Place(actorType, actorId string) Node {
-	return c.placement.Place(actorType, actorId, c.membership.Members())
-}
-
-// Close 关闭集群。
-func (c *Cluster) Close() error {
-	return c.membership.Close()
-}
-
-// ─── Router 路由分发层 ───
-
-// Dialer 是建立到目标节点的 rpc.Client 的函数类型。
-type Dialer[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]] func(addr string) *rpc.Client[M, C, T]
+// ─── 租约重试配置 ───
 
 // LeaseForceReleaser 是强制释放租约的接口。
 // PersistenceManager 通过 Driver 实现此接口。
@@ -67,25 +20,21 @@ type LeaseForceReleaser interface {
 	ForceRelease(ctx context.Context, actorType string, id string) (int64, error)
 }
 
-// RouterConfig 是 Router 的租约重试配置，不依赖泛型参数。
+// RouterConfig 是 Router 的租约重试配置。
 type RouterConfig struct {
 	LeaseRetry    bool
 	ForceReleaser LeaseForceReleaser
 }
 
-// RouterOption 是 Router 的配置选项（非泛型，直接用于 RouterConfig）。
+// RouterOption 是 Router 的配置选项。
 type RouterOption func(*RouterConfig)
 
 // WithLeaseRetry 启用租约失败自动重试。
-// 启用后，Call/Post 遇到 *grain.ErrLeaseTaken 时会先尝试转发到持有者节点。
 func WithLeaseRetry(enabled bool) RouterOption {
 	return func(c *RouterConfig) { c.LeaseRetry = enabled }
 }
 
-// WithForceReleaser 设置强制释放租约的接口。
-// 设置后，租约持有者不可达时自动强制释放租约后本地重试。
-// 通常传入 grain.PersistenceManager，它实现了 LeaseForceReleaser 接口。
-// 同时自动启用 LeaseRetry。
+// WithForceReleaser 设置强制释放租约的接口，自动启用 LeaseRetry。
 func WithForceReleaser(releaser LeaseForceReleaser) RouterOption {
 	return func(c *RouterConfig) {
 		c.ForceReleaser = releaser
@@ -93,16 +42,17 @@ func WithForceReleaser(releaser LeaseForceReleaser) RouterOption {
 	}
 }
 
-// Router 封装集群路由分发逻辑，M/C/T 与 rpc.Client 泛型参数对应。
-// 根据 Placement 结果自动决定本地处理还是远程转发。
+// ─── Router 路由分发层 ───
+
+// Router 封装集群路由分发逻辑。内置 Membership + Placement 拓扑和 rpc.Client 连接池。
+// 根据 Placement 结果自动决定本地处理（通过 actor.Manager）还是远程转发（通过 rpc.Client）。
 //
 // 用法：
 //
-//	// 基础用法（无租约重试）
-//	router := cluster.NewRouter(cluster, mgr, dialer)
+//	router := cluster.NewRouter[D, C, T](membership, placement, mgr)
 //
 //	// 带租约重试 + 强制释放
-//	router := cluster.NewRouter(cluster, mgr, dialer,
+//	router := cluster.NewRouter[D, C, T](membership, placement, mgr,
 //	    cluster.WithForceReleaser(pm),
 //	)
 //
@@ -111,24 +61,24 @@ func WithForceReleaser(releaser LeaseForceReleaser) RouterOption {
 //	cluster.Broadcast(router, &KickAll{})
 //	cluster.Multicast(router, []PlayerId{id1, id2}, &SyncState{...})
 type Router[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]] struct {
-	cluster    *Cluster
+	membership Membership
+	placement  PlacementStrategy
 	mgr        *actor.Manager
-	dialer     Dialer[M, C, T]
 	clientPool *clientPool[M, C, T]
 	cfg        RouterConfig
 }
 
 // NewRouter 创建一个路由分发器。
 func NewRouter[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]](
-	cluster *Cluster,
+	membership Membership,
+	placement PlacementStrategy,
 	mgr *actor.Manager,
-	dialer Dialer[M, C, T],
 	opts ...RouterOption,
 ) *Router[M, C, T] {
 	r := &Router[M, C, T]{
-		cluster:    cluster,
+		membership: membership,
+		placement:  placement,
 		mgr:        mgr,
-		dialer:     dialer,
 		clientPool: newClientPool[M, C, T](),
 	}
 	for _, opt := range opts {
@@ -139,54 +89,49 @@ func NewRouter[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]](
 
 // Self 返回本地节点信息。
 func (r *Router[M, C, T]) Self() Node {
-	return r.cluster.Self()
+	return r.membership.Self()
 }
 
 // Members 返回当前集群成员列表。
 func (r *Router[M, C, T]) Members() NodeSet {
-	return r.cluster.Members()
+	return r.membership.Members()
 }
 
 // Events 返回成员变更事件 channel。
 func (r *Router[M, C, T]) Events() <-chan MemberEvent {
-	return r.cluster.Events()
+	return r.membership.Events()
 }
 
 // Place 返回指定 Actor 的偏好节点。
 func (r *Router[M, C, T]) Place(actorType, actorId string) Node {
-	return r.cluster.Place(actorType, actorId)
+	return r.placement.Place(actorType, actorId, r.membership.Members())
 }
 
 // IsLocal 判断指定 Actor 的偏好节点是否为本地。
 func (r *Router[M, C, T]) IsLocal(actorType, actorId string) bool {
-	preferred := r.cluster.Place(actorType, actorId)
-	return preferred.ID == r.cluster.Self().ID
+	preferred := r.Place(actorType, actorId)
+	return preferred.ID == r.Self().ID
 }
 
 // GetClient 获取或创建到目标节点的 rpc.Client 连接。
 func (r *Router[M, C, T]) GetClient(target Node) (*rpc.Client[M, C, T], error) {
-	return r.clientPool.getOrDial(target, r.dialer)
+	return r.clientPool.getOrDial(target)
 }
 
-// RemoveClient 移除并关闭到指定节点的连接（节点离开时调用）。
+// RemoveClient 移除并关闭到指定节点的连接。
 func (r *Router[M, C, T]) RemoveClient(addr string) {
 	r.clientPool.remove(addr)
 }
 
-// Close 关闭 Router，释放所有连接。
+// Close 关闭 Router，释放所有连接和 Membership。
 func (r *Router[M, C, T]) Close() error {
 	r.clientPool.closeAll()
-	return r.cluster.Close()
+	return r.membership.Close()
 }
 
 // ─── 调用方 API ───
 
 // Post 向指定 Actor 发送 fire-and-forget 消息。
-// 自动根据 Place 结果选择本地执行还是远程转发。
-//
-// 当 Router 配置了租约重试选项时，遇到 *grain.ErrLeaseTaken 会：
-//  1. 尝试转发到租约持有者节点
-//  2. 若持有者不可达且有 ForceReleaser，强制释放租约后本地重试
 func Post[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	id A,
@@ -200,11 +145,6 @@ func Post[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q 
 }
 
 // Call 向指定 Actor 发送请求，等待回复。
-// 自动根据 Place 结果选择本地执行还是远程转发。
-//
-// 当 Router 配置了租约重试选项时，遇到 *grain.ErrLeaseTaken 会：
-//  1. 尝试转发到租约持有者节点
-//  2. 若持有者不可达且有 ForceReleaser，强制释放租约后本地重试
 func Call[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	ctx context.Context,
 	r *Router[M, C, T],
@@ -223,21 +163,19 @@ func Broadcast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 	r *Router[M, C, T],
 	req Q,
 ) error {
-	self := r.cluster.Self()
-	allNodes := r.cluster.Members()
+	self := r.Self()
+	allNodes := r.Members()
 
-	// 本地广播
 	if _, err := actor.Broadcast(r.mgr, req); err != nil {
 		return err
 	}
 
-	// 向所有其他节点远程广播
 	var lastErr error
 	for _, node := range allNodes {
 		if node.ID == self.ID {
 			continue
 		}
-		client, err := r.clientPool.getOrDial(node, r.dialer)
+		client, err := r.clientPool.getOrDial(node)
 		if err != nil {
 			lastErr = err
 			continue
@@ -259,10 +197,9 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 		return 0, nil
 	}
 
-	self := r.cluster.Self()
+	self := r.Self()
 	actorType := string(ids[0].ActorType())
 
-	// 按节点分组
 	nodeGroups := make(map[string]struct {
 		node Node
 		ids  []A
@@ -270,7 +207,7 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 	var localIds []A
 
 	for _, id := range ids {
-		preferred := r.cluster.Place(actorType, id.String())
+		preferred := r.Place(actorType, id.String())
 		if preferred.ID == self.ID {
 			localIds = append(localIds, id)
 		} else {
@@ -285,7 +222,6 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 
 	total := 0
 
-	// 本地发送
 	if len(localIds) > 0 {
 		n, err := actor.Multicast(r.mgr, localIds, req)
 		if err != nil {
@@ -294,9 +230,8 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 		total += n
 	}
 
-	// 按节点远程发送
 	for _, g := range nodeGroups {
-		client, err := r.clientPool.getOrDial(g.node, r.dialer)
+		client, err := r.clientPool.getOrDial(g.node)
 		if err != nil {
 			continue
 		}
@@ -311,35 +246,33 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 
 // ─── 租约重试逻辑 ───
 
-// postOnce 执行单次 Post 路由。
 func postOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	id A,
 	req Q,
 ) error {
-	preferred := r.cluster.Place(string(id.ActorType()), id.String())
-	if preferred.ID == r.cluster.Self().ID {
+	preferred := r.Place(string(id.ActorType()), id.String())
+	if preferred.ID == r.Self().ID {
 		return actor.Post(r.mgr, id, req)
 	}
-	client, err := r.clientPool.getOrDial(preferred, r.dialer)
+	client, err := r.clientPool.getOrDial(preferred)
 	if err != nil {
 		return err
 	}
 	return rpc.Post[M, C, T](client, id, req)
 }
 
-// callOnce 执行单次 Call 路由。
 func callOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	ctx context.Context,
 	r *Router[M, C, T],
 	id A,
 	req Q,
 ) (R, error) {
-	preferred := r.cluster.Place(string(id.ActorType()), id.String())
-	if preferred.ID == r.cluster.Self().ID {
+	preferred := r.Place(string(id.ActorType()), id.String())
+	if preferred.ID == r.Self().ID {
 		return actor.Call(ctx, r.mgr, id, req)
 	}
-	client, err := r.clientPool.getOrDial(preferred, r.dialer)
+	client, err := r.clientPool.getOrDial(preferred)
 	if err != nil {
 		var zero R
 		return zero, err
@@ -347,7 +280,6 @@ func callOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId
 	return rpc.Call[M, C, T](ctx, client, id, req)
 }
 
-// handleLeasePost 处理 Post 的租约重试逻辑。
 func handleLeasePost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	id A,
@@ -363,12 +295,10 @@ func handleLeasePost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.
 		return origErr
 	}
 
-	// 尝试转发到租约持有者节点
 	if tryForwardPost(r, id, req, taken) == nil {
 		return nil
 	}
 
-	// 强制释放租约后本地重试
 	if r.cfg.ForceReleaser != nil {
 		actorType := string(id.ActorType())
 		if _, forceErr := r.cfg.ForceReleaser.ForceRelease(context.Background(), actorType, id.String()); forceErr != nil {
@@ -380,7 +310,6 @@ func handleLeasePost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.
 	return origErr
 }
 
-// handleLeaseCall 处理 Call 的租约重试逻辑。
 func handleLeaseCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	ctx context.Context,
 	r *Router[M, C, T],
@@ -398,12 +327,10 @@ func handleLeaseCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.
 		return zero, origErr
 	}
 
-	// 尝试转发到租约持有者节点
 	if reply, ok := tryForwardCall(ctx, r, id, req, taken); ok {
 		return reply, nil
 	}
 
-	// 强制释放租约后本地重试
 	if r.cfg.ForceReleaser != nil {
 		actorType := string(id.ActorType())
 		if _, forceErr := r.cfg.ForceReleaser.ForceRelease(ctx, actorType, id.String()); forceErr != nil {
@@ -415,18 +342,17 @@ func handleLeaseCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.
 	return zero, origErr
 }
 
-// tryForwardPost 尝试将 Post 请求转发到租约持有者节点。
 func tryForwardPost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	r *Router[M, C, T],
 	id A,
 	req Q,
 	taken *grain.ErrLeaseTaken,
 ) error {
-	if taken.Owner == "" || taken.Owner == r.cluster.Self().ID {
+	if taken.Owner == "" || taken.Owner == r.Self().ID {
 		return fmt.Errorf("cannot forward to self")
 	}
 
-	ownerNode := r.cluster.Members().Lookup(taken.Owner)
+	ownerNode := r.Members().Lookup(taken.Owner)
 	if ownerNode == nil {
 		return fmt.Errorf("lease owner %s not in cluster", taken.Owner)
 	}
@@ -443,8 +369,6 @@ func tryForwardPost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.A
 	return nil
 }
 
-// tryForwardCall 尝试将 Call 请求转发到租约持有者节点。
-// 返回 (reply, ok)，ok=true 表示转发成功。
 func tryForwardCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
 	ctx context.Context,
 	r *Router[M, C, T],
@@ -453,11 +377,11 @@ func tryForwardCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.A
 	taken *grain.ErrLeaseTaken,
 ) (R, bool) {
 	var zero R
-	if taken.Owner == "" || taken.Owner == r.cluster.Self().ID {
+	if taken.Owner == "" || taken.Owner == r.Self().ID {
 		return zero, false
 	}
 
-	ownerNode := r.cluster.Members().Lookup(taken.Owner)
+	ownerNode := r.Members().Lookup(taken.Owner)
 	if ownerNode == nil {
 		return zero, false
 	}
@@ -475,7 +399,6 @@ func tryForwardCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.A
 	return reply, true
 }
 
-// isLeaseTaken 判断错误是否为租约被占用错误。
 func isLeaseTaken(err error) *grain.ErrLeaseTaken {
 	var taken *grain.ErrLeaseTaken
 	if errors.As(err, &taken) {
@@ -497,7 +420,7 @@ func newClientPool[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M]]() *clientP
 	}
 }
 
-func (p *clientPool[M, C, T]) getOrDial(target Node, dialer Dialer[M, C, T]) (*rpc.Client[M, C, T], error) {
+func (p *clientPool[M, C, T]) getOrDial(target Node) (*rpc.Client[M, C, T], error) {
 	p.mu.Lock()
 	if client, ok := p.clients[target.Addr]; ok {
 		p.mu.Unlock()
@@ -505,16 +428,7 @@ func (p *clientPool[M, C, T]) getOrDial(target Node, dialer Dialer[M, C, T]) (*r
 	}
 	p.mu.Unlock()
 
-	if dialer == nil {
-		return nil, &RouteError{
-			ActorType: "",
-			ActorId:   "",
-			Owner:     target.ID,
-			Reason:    "no dialer set, cannot connect to remote node",
-		}
-	}
-
-	client := dialer(target.Addr)
+	client := rpc.NewClient[M, C, T](target.Addr)
 	if err := client.Connect(); err != nil {
 		return nil, &RouteError{
 			ActorType: "",
@@ -556,7 +470,6 @@ func (p *clientPool[M, C, T]) closeAll() {
 
 // ─── RouteError 路由错误 ───
 
-// RouteError 表示路由失败，携带目标节点信息供调用方处理。
 type RouteError struct {
 	ActorType string
 	ActorId   string
@@ -571,7 +484,6 @@ func (e *RouteError) Error() string {
 
 // ─── 工具函数 ───
 
-// MembersToNodeSet 将成员列表转换为有序 NodeSet。
 func MembersToNodeSet(members []Node) NodeSet {
 	sorted := make([]Node, len(members))
 	copy(sorted, members)
@@ -581,7 +493,6 @@ func MembersToNodeSet(members []Node) NodeSet {
 	return NodeSet(sorted)
 }
 
-// MemberDiff 比较新旧成员列表，返回加入和离开的节点。
 func MemberDiff(old, new NodeSet) (joined, left NodeSet) {
 	oldMap := make(map[string]Node)
 	for _, n := range old {

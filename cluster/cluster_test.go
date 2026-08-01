@@ -45,14 +45,14 @@ func newStaticMembership(self Node, members ...Node) *staticMembership {
 	}
 }
 
-func (s *staticMembership) Self() Node                    { return s.self }
-func (s *staticMembership) Members() NodeSet              { return s.members }
-func (s *staticMembership) Events() <-chan MemberEvent    { return s.events }
-func (s *staticMembership) Join(seeds []string) error     { return nil }
-func (s *staticMembership) Leave() error                  { return nil }
-func (s *staticMembership) Close() error                  { return nil }
+func (s *staticMembership) Self() Node                 { return s.self }
+func (s *staticMembership) Members() NodeSet           { return s.members }
+func (s *staticMembership) Events() <-chan MemberEvent { return s.events }
+func (s *staticMembership) Join(seeds []string) error  { return nil }
+func (s *staticMembership) Leave() error               { return nil }
+func (s *staticMembership) Close() error               { return nil }
 
-// ─── 测试用 Dummy Message/Codec/Transport（Router 编译所需，不真正使用） ───
+// ─── 测试用 Dummy Message/Codec/Transport ───
 
 type DummyMessage struct{}
 
@@ -76,81 +76,11 @@ func (DummyTransport) EncodeRep(seq uint64, repM DummyMessage, rerr string) (dat
 	return nil, nil
 }
 
-type DummyRouter = Router[DummyMessage, DummyCodec, DummyTransport]
-
-func newDummyRouter(cluster *Cluster, mgr *actor.Manager) *DummyRouter {
-	return NewRouter[DummyMessage, DummyCodec, DummyTransport](cluster, mgr, nil)
-}
-
-// ─── Cluster 拓扑测试 ───
-
-func TestCluster_Place(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
-
-	mem := newStaticMembership(node1, node1, node2, node3)
-	c := New(mem, NewConsistentHashPlacement(128))
-
-	self := c.Self()
-	if self.ID != "node-1" {
-		t.Errorf("Self: want node-1, got %s", self.ID)
-	}
-
-	members := c.Members()
-	if len(members) != 3 {
-		t.Errorf("Members: want 3, got %d", len(members))
-	}
-
-	preferred := c.Place("test", "actor-1")
-	if preferred.ID == "" {
-		t.Error("Place: expected non-empty node ID")
-	}
-}
-
-func TestCluster_Close(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
-
-	if err := c.Close(); err != nil {
-		t.Errorf("Close failed: %v", err)
-	}
-}
-
-func TestCluster_Events(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
-
-	events := c.Events()
-	if events == nil {
-		t.Error("Events: expected non-nil channel")
-	}
-}
-
-func TestCluster_PlaceConsistent(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-
-	mem := newStaticMembership(node1, node1, node2)
-	c := New(mem, NewConsistentHashPlacement(128))
-
-	first := c.Place("test", "consistent-actor")
-	for i := 0; i < 10; i++ {
-		got := c.Place("test", "consistent-actor")
-		if got.ID != first.ID {
-			t.Errorf("Place: inconsistent result, want %s, got %s", first.ID, got.ID)
-		}
-	}
-}
-
 // ─── Router 本地调用测试 ───
 
 func TestRouter_LocalCall(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
@@ -159,7 +89,7 @@ func TestRouter_LocalCall(t *testing.T) {
 		})
 	})
 
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	ctx := context.Background()
 	id := TestActorId{Name: "local-call"}
@@ -180,7 +110,6 @@ func TestRouter_LocalCall(t *testing.T) {
 func TestRouter_LocalPost(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 
 	var received string
 	var mu sync.Mutex
@@ -194,7 +123,7 @@ func TestRouter_LocalPost(t *testing.T) {
 		})
 	})
 
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	id := TestActorId{Name: "local-post"}
 	if !router.IsLocal(string(id.ActorType()), id.String()) {
@@ -217,7 +146,6 @@ func TestRouter_LocalPost(t *testing.T) {
 func TestRouter_LocalBroadcast(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 
 	var count int32
 	var mu sync.Mutex
@@ -232,12 +160,11 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 		})
 	})
 
-	// 创建几个 actor
 	for i := 0; i < 3; i++ {
 		_, _ = actor.Call(context.Background(), mgr, TestActorId{Name: "bc-" + fmt.Sprint(i)}, &Ping{Msg: "init"})
 	}
 
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	err := Broadcast[DummyMessage, DummyCodec, DummyTransport, TestActorId](router, &Ping{Msg: "broadcast"})
 	if err != nil {
 		t.Fatalf("Broadcast failed: %v", err)
@@ -253,7 +180,6 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 func TestRouter_LocalMulticast(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 
 	var count int32
 	var mu sync.Mutex
@@ -276,7 +202,7 @@ func TestRouter_LocalMulticast(t *testing.T) {
 		_, _ = actor.Call(context.Background(), mgr, id, &Ping{Msg: "init"})
 	}
 
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, ids, &Ping{Msg: "multicast"})
 	if err != nil {
 		t.Fatalf("Multicast failed: %v", err)
@@ -289,10 +215,8 @@ func TestRouter_LocalMulticast(t *testing.T) {
 func TestRouter_IsLocal(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
-
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	if !router.IsLocal("any", "actor") {
 		t.Error("IsLocal: expected true for single-node cluster")
@@ -304,10 +228,9 @@ func TestRouter_IsLocal(t *testing.T) {
 func TestRouter_NewRouter(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
 
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	if router == nil {
 		t.Fatal("NewRouter: expected non-nil router")
 	}
@@ -322,9 +245,8 @@ func TestRouter_NewRouter(t *testing.T) {
 func TestRouter_Self(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	self := router.Self()
 	if self.ID != "node-1" {
@@ -340,9 +262,8 @@ func TestRouter_Members(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
 	mem := newStaticMembership(node1, node1, node2, node3)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	members := router.Members()
 	if len(members) != 3 {
@@ -362,9 +283,8 @@ func TestRouter_Members(t *testing.T) {
 func TestRouter_Events(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	events := router.Events()
 	if events == nil {
@@ -375,9 +295,8 @@ func TestRouter_Events(t *testing.T) {
 func TestRouter_Close(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	if err := router.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)
@@ -391,15 +310,13 @@ func TestRouter_Place(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
 	mem := newStaticMembership(node1, node1, node2, node3)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	n := router.Place("player", "actor-1")
 	if n.ID == "" {
 		t.Error("Place: expected non-empty node ID")
 	}
-	// 一致性哈希：同一个 key 多次 Place 应返回相同结果
 	for i := 0; i < 5; i++ {
 		if got := router.Place("player", "actor-1"); got.ID != n.ID {
 			t.Errorf("Place: inconsistent, want %s, got %s", n.ID, got.ID)
@@ -410,9 +327,8 @@ func TestRouter_Place(t *testing.T) {
 func TestRouter_Place_EmptyMembers(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	n := router.Place("player", "actor-1")
 	if n.ID != "" {
@@ -425,11 +341,9 @@ func TestRouter_IsLocal_MultiNode(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
 	mem := newStaticMembership(node1, node1, node2, node3)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
-	// 在多节点集群中，IsLocal 应与 Place 结果一致
 	isLocal := router.IsLocal("player", "actor-x")
 	n := router.Place("player", "actor-x")
 	if isLocal != (n.ID == node1.ID) {
@@ -439,23 +353,21 @@ func TestRouter_IsLocal_MultiNode(t *testing.T) {
 
 // ─── Router.GetClient / RemoveClient ───
 
-func TestRouter_GetClient_NoDialer(t *testing.T) {
+func TestRouter_GetClient_Remote(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
+	// 连接到远程节点会失败（地址不可达），但不应 panic
 	_, err := router.GetClient(node2)
 	if err == nil {
-		t.Error("GetClient without dialer: expected error")
+		t.Error("GetClient(remote): expected error for unreachable node")
 	}
 	var routeErr *RouteError
 	if err != nil {
-		if _, ok := interface{}(err).(*RouteError); !ok {
-			t.Errorf("GetClient error should be *RouteError, got %T", err)
-		}
+		t.Logf("GetClient error (expected): %v", err)
 		_ = routeErr
 	}
 }
@@ -463,41 +375,23 @@ func TestRouter_GetClient_NoDialer(t *testing.T) {
 func TestRouter_RemoveClient_NoExist(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
-	// 移除不存在的连接不应 panic
 	router.RemoveClient("no-such-addr")
-}
-
-func TestRouter_GetClient_Self(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
-	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
-
-	// 获取到自己的连接（无 dialer 也应报错）
-	_, err := router.GetClient(node1)
-	if err == nil {
-		t.Log("GetClient(self) succeeded (dialer was nil but self was in pool?)")
-	}
 }
 
 // ─── Router Call/Post 远程失败场景 ───
 
-func TestRouter_Call_RemoteWithoutDialer(t *testing.T) {
+func TestRouter_Call_RemoteUnreachable(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	ctx := context.Background()
 
-	// 遍历多个 id，确保至少有一个落在远程节点
 	found := false
 	for i := 0; i < 50; i++ {
 		id := TestActorId{Name: fmt.Sprintf("remote-call-%d", i)}
@@ -507,7 +401,7 @@ func TestRouter_Call_RemoteWithoutDialer(t *testing.T) {
 		found = true
 		_, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &Ping{Msg: "hello"})
 		if err == nil {
-			t.Error("Call to remote without dialer: expected error")
+			t.Error("Call to remote: expected error")
 		}
 		break
 	}
@@ -516,13 +410,12 @@ func TestRouter_Call_RemoteWithoutDialer(t *testing.T) {
 	}
 }
 
-func TestRouter_Post_RemoteWithoutDialer(t *testing.T) {
+func TestRouter_Post_RemoteUnreachable(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	id := TestActorId{Name: "remote-post"}
 	if router.IsLocal(string(id.ActorType()), id.String()) {
@@ -531,7 +424,7 @@ func TestRouter_Post_RemoteWithoutDialer(t *testing.T) {
 
 	err := Post[DummyMessage, DummyCodec, DummyTransport](router, id, &Ping{Msg: "hello"})
 	if err == nil {
-		t.Error("Post to remote without dialer: expected error")
+		t.Error("Post to remote: expected error")
 	}
 }
 
@@ -540,9 +433,8 @@ func TestRouter_Post_RemoteWithoutDialer(t *testing.T) {
 func TestRouter_Multicast_Empty(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, []TestActorId{}, &Ping{Msg: "empty"})
 	if err != nil {
@@ -558,11 +450,9 @@ func TestRouter_Multicast_AllRemote(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
 	mem := newStaticMembership(node1, node1, node2, node3)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
-	// 找出被 Place 到远程节点的 actor id
 	var remoteIds []TestActorId
 	for i := 0; i < 20; i++ {
 		id := TestActorId{Name: fmt.Sprintf("mc-remote-%d", i)}
@@ -577,9 +467,7 @@ func TestRouter_Multicast_AllRemote(t *testing.T) {
 		t.Skip("not enough remote-placed actors for test")
 	}
 
-	// 没有 dialer，远程发送会失败但不 panic
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, remoteIds, &Ping{Msg: "all-remote"})
-	// 没有 dialer 时远程部分会跳过，返回已发送的计数
 	if n < 0 || n > len(remoteIds) {
 		t.Errorf("Multicast all-remote: unexpected count %d (expected 0-%d)", n, len(remoteIds))
 	}
@@ -591,7 +479,6 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
-	c := New(mem, NewConsistentHashPlacement(128))
 
 	var localCount int32
 	var mu sync.Mutex
@@ -605,14 +492,13 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 		})
 	})
 
-	// 创建多个 actor，其中一些可能在本地，一些在远程
 	var ids []TestActorId
 	for i := 0; i < 10; i++ {
 		id := TestActorId{Name: fmt.Sprintf("mc-mix-%d", i)}
 		ids = append(ids, id)
 	}
 
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, ids, &Ping{Msg: "mixed"})
 	if n < 0 {
 		t.Errorf("Multicast mixed: unexpected negative count %d", n)
@@ -630,9 +516,8 @@ func TestClientPool_Concurrent(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 20)
@@ -653,7 +538,6 @@ func TestClientPool_Concurrent(t *testing.T) {
 	for range errCh {
 		errCount++
 	}
-	// 所有 goroutine 都应返回 RouteError（无 dialer），不应 panic
 	if errCount != 20 {
 		t.Errorf("Concurrent GetClient: expected 20 errors, got %d", errCount)
 	}
@@ -662,9 +546,8 @@ func TestClientPool_Concurrent(t *testing.T) {
 func TestClientPool_ConcurrentRemove(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	c := New(mem, NewConsistentHashPlacement(128))
 	mgr := actor.NewManager()
-	router := newDummyRouter(c, mgr)
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -676,7 +559,6 @@ func TestClientPool_ConcurrentRemove(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	// 不应 panic
 }
 
 // ─── RouteError 格式测试 ───
@@ -737,26 +619,20 @@ func searchSubstring(s, sub string) bool {
 	return false
 }
 
-// ─── ClientPool 测试 ───
+// ─── RouteError 测试 ───
 
-func TestClientPool_GetOrDial_NoDialer(t *testing.T) {
-	pool := newClientPool[DummyMessage, DummyCodec, DummyTransport]()
-	_, err := pool.getOrDial(Node{ID: "node-2", Addr: "127.0.0.1:8002"}, nil)
-	if err == nil {
-		t.Error("getOrDial without dialer: expected error")
+func TestRouteError_Error(t *testing.T) {
+	err := &RouteError{
+		ActorType: "Player",
+		ActorId:   "alice",
+		Owner:     "node-2",
+		Reason:    "lease taken by another node",
 	}
-	var routeErr *RouteError
-	if err != nil {
-		t.Logf("getOrDial error (expected): %v", err)
-		_ = routeErr
+	msg := err.Error()
+	if msg == "" {
+		t.Error("RouteError.Error() should not be empty")
 	}
-}
-
-func TestClientPool_Remove(t *testing.T) {
-	pool := newClientPool[DummyMessage, DummyCodec, DummyTransport]()
-	// 删除不存在的 key 不应 panic
-	pool.remove("no-such-addr")
-	pool.closeAll()
+	t.Logf("RouteError: %s", msg)
 }
 
 // ─── Placement 测试 ───
@@ -815,7 +691,7 @@ func TestConsistentPlacement_NodeRemoval(t *testing.T) {
 	}
 }
 
-// ─── Node / NodeSet 测试 ───
+// ─── Node / NodeSet / MemberDiff 测试 ───
 
 func TestNodeSet_Basic(t *testing.T) {
 	ns := NodeSet{{ID: "a"}, {ID: "b"}}
@@ -823,8 +699,6 @@ func TestNodeSet_Basic(t *testing.T) {
 		t.Errorf("len: want 2, got %d", len(ns))
 	}
 }
-
-// ─── MemberDiff 测试 ───
 
 func TestMemberDiff(t *testing.T) {
 	old := NodeSet{
@@ -857,22 +731,6 @@ func TestMemberDiff_EmptyOld(t *testing.T) {
 	if len(joined) != 1 || len(left) != 0 {
 		t.Error("empty old: expected 1 joined, 0 left")
 	}
-}
-
-// ─── RouteError 测试 ───
-
-func TestRouteError_Error(t *testing.T) {
-	err := &RouteError{
-		ActorType: "Player",
-		ActorId:   "alice",
-		Owner:     "node-2",
-		Reason:    "lease taken by another node",
-	}
-	msg := err.Error()
-	if msg == "" {
-		t.Error("RouteError.Error() should not be empty")
-	}
-	t.Logf("RouteError: %s", msg)
 }
 
 func nodeIds(ns NodeSet) []string {
