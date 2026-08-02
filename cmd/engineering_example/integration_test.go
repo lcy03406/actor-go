@@ -42,6 +42,7 @@ func startTestNode(t *testing.T) *testNode {
 		NodeType: "all-in-one",
 		NodeID:   "test-node",
 		Addr:     "localhost:0",
+		DataDir:  dataDir,
 	})
 	if err != nil {
 		cancel()

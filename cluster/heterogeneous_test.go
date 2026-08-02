@@ -297,6 +297,7 @@ func TestRouter_HeterogeneousCluster_PlayerOnly(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[HetPlayerId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[HetPlayerId, string], req *HetPingP, _ bool) (*HetPong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &HetPong{Msg: req.Msg + "-pong"}, nil
 		})
 	})
@@ -320,6 +321,7 @@ func TestRouter_HeterogeneousCluster_RoomNotLocal(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[HetPlayerId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[HetPlayerId, string], req *HetPingP, _ bool) (*HetPong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &HetPong{Msg: req.Msg + "-pong"}, nil
 		})
 	})
@@ -342,6 +344,7 @@ func TestRouter_HeterogeneousCluster_MultiGroupNode(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[HetPlayerId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[HetPlayerId, string], req *HetPingP, _ bool) (*HetPong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &HetPong{Msg: req.Msg + "-pong"}, nil
 		})
 	})

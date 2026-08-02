@@ -76,6 +76,7 @@ func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
 			return actor.OK, nil
 		})
@@ -202,6 +203,7 @@ func TestRPCCallSpawn(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterServe(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLoginWithReply, spawning bool) (*TestRpcAddReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
 			return &TestRpcAddReply{Result: a.State().Value}, nil
 		})
@@ -262,6 +264,7 @@ func TestRPCCallTimeoutExceeded(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
 			return actor.OK, nil
 		})

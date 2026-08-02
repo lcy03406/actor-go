@@ -38,6 +38,7 @@ type HandlerSpawn struct {
 
 func (*HandlerSpawn) ReqType(_ HandlerTestId, _ actor.OkReply) string { return "HandlerSpawn" }
 func (req *HandlerSpawn) Handle(ctx *actor.ActorContext[HandlerTestId, HandlerTestState], spawning bool) (actor.OkReply, error) {
+	ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 	ctx.SetState(HandlerTestState{Value: req.InitValue})
 	return actor.OK, nil
 }
@@ -61,6 +62,7 @@ type HandlerServe struct {
 func (*HandlerServe) ReqType(_ HandlerTestId, _ *HandlerTestReply) string { return "HandlerServe" }
 func (req *HandlerServe) Handle(ctx *actor.ActorContext[HandlerTestId, HandlerTestState], spawning bool) (*HandlerTestReply, error) {
 	if spawning {
+		ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 		ctx.SetState(HandlerTestState{Value: req.InitValue})
 	}
 	return &HandlerTestReply{Result: ctx.State().Value}, nil

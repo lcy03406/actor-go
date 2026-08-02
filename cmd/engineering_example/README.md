@@ -46,7 +46,7 @@ cmd/engineering_example/
 │   │   │   ├── cast.go                     ControlCast（释放技能，post PlayerDamage）
 │   │   │   └── list.go                     ListSkills
 │   │   │
-│   │   ├── handler.go                     handler+RPC注册（grain.WrapSpawnHandler2）
+│   │   ├── handler.go                     handler+RPC注册（spawn 时显式 Activate）
 │   │   ├── login.go                       登录（spawn handler）
 │   │   ├── attack.go                      ControlAttack（玩家意图，post PlayerDamage）
 │   │   ├── heal.go / addgold.go / close.go
@@ -135,8 +135,14 @@ actor.RegisterQueryHandler2(b, (*attr.AddExp)(nil))
 `player/types/snapshot.go` 定义 `PlayerSnapshotter = ShotSelf[PlayerState]`，完整保存 PlayerState。
 
 ```go
-// handler.go — spawn 包装
-actor.RegisterSpawn(b, grain.WrapSpawnHandler2(pm, (*Login)(nil)))
+// handler.go — spawn 时显式激活
+actor.RegisterSpawn(b, func(ctx *PlayerActorCtx, req *Login, spawning bool) (actor.OkReply, error) {
+    res, err := ctx.State().Activate(ctx, pm)
+    if err != nil {
+        return actor.OK, err
+    }
+    return req.Handle(ctx, spawning, res)
+})
 
 // 业务 handler 中
 ctx.State().Persist(ctx)     // 保存 + 续租

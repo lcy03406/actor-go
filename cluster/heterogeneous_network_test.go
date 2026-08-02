@@ -33,7 +33,7 @@ type HPlayerId struct {
 }
 
 func (id HPlayerId) ActorType() actor.ActorType { return "Player" }
-func (id HPlayerId) String() string              { return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId) }
+func (id HPlayerId) String() string             { return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId) }
 
 type HRoomId struct {
 	RoomId int `json:"roomId"`
@@ -58,21 +58,27 @@ type HLogin struct {
 
 func (*HLogin) ReqType(_ HPlayerId, _ actor.OkReply) string { return "Login" }
 
-type HAttack struct{ Damage int `json:"damage"` }
+type HAttack struct {
+	Damage int `json:"damage"`
+}
 type HAttackReply struct {
 	RemainingHP int `json:"remainingHP"`
 }
 
 func (*HAttack) ReqType(_ HPlayerId, _ *HAttackReply) string { return "Attack" }
 
-type HHeal struct{ Amount int `json:"amount"` }
+type HHeal struct {
+	Amount int `json:"amount"`
+}
 type HHealReply struct {
 	NewHP int `json:"newHP"`
 }
 
 func (*HHeal) ReqType(_ HPlayerId, _ *HHealReply) string { return "Heal" }
 
-type HCreateRoom struct{ MaxPlayers int `json:"maxPlayers"` }
+type HCreateRoom struct {
+	MaxPlayers int `json:"maxPlayers"`
+}
 
 func (*HCreateRoom) ReqType(_ HRoomId, _ actor.OkReply) string { return "CreateRoom" }
 
@@ -83,7 +89,9 @@ type HRoomInfoReply struct {
 
 func (*HRoomInfo) ReqType(_ HRoomId, _ *HRoomInfoReply) string { return "RoomInfo" }
 
-type HSendMessage struct{ Text string `json:"text"` }
+type HSendMessage struct {
+	Text string `json:"text"`
+}
 type HSendMessageReply struct {
 	Echo string `json:"echo"`
 }
@@ -148,6 +156,7 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 	case "player-server":
 		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HPlayerId, HPlayerState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[HPlayerId, HPlayerState], req *HLogin, _ bool) (actor.OkReply, error) {
+				ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 				ctx.SetState(HPlayerState{HP: req.InitHP, Level: req.InitLevel})
 				return actor.OK, nil
 			})
@@ -163,6 +172,7 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 	case "room-server":
 		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HRoomId, HRoomState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[HRoomId, HRoomState], req *HCreateRoom, _ bool) (actor.OkReply, error) {
+				ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 				ctx.SetState(HRoomState{MaxPlayers: req.MaxPlayers})
 				return actor.OK, nil
 			})
@@ -173,6 +183,7 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 	case "chat-server":
 		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HChatId, HChatState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[HChatId, HChatState], req *HSendMessage, _ bool) (*HSendMessageReply, error) {
+				ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 				ctx.State().Messages = append(ctx.State().Messages, req.Text)
 				return &HSendMessageReply{Echo: req.Text}, nil
 			})

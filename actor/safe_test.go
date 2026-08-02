@@ -18,7 +18,7 @@ type SafeTestId struct {
 }
 
 func (id SafeTestId) ActorType() actor.ActorType { return "SafeTest" }
-func (id SafeTestId) String() string              { return "SafeTest(" + id.Name + ")" }
+func (id SafeTestId) String() string             { return "SafeTest(" + id.Name + ")" }
 
 type SafeTestState struct {
 	Value int
@@ -67,6 +67,7 @@ func (*SafeTestClose) ReqType(_ SafeTestId, _ actor.OkReply) string { return "Sa
 func setupSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestInit, _ bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(SafeTestState{Value: req.Value})
 			return actor.OK, nil
 		})
@@ -303,6 +304,7 @@ func TestSafeCallVsCall(t *testing.T) {
 	// 注册两个 Group：Safe 版本和普通版本
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestInit, _ bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(SafeTestState{Value: req.Value})
 			return actor.OK, nil
 		})
@@ -354,7 +356,7 @@ type RefSafeTestId struct {
 }
 
 func (id RefSafeTestId) ActorType() actor.ActorType { return "RefSafeTest" }
-func (id RefSafeTestId) String() string              { return "RefSafeTest(" + id.Name + ")" }
+func (id RefSafeTestId) String() string             { return "RefSafeTest(" + id.Name + ")" }
 
 type RefSafeState struct {
 	Counter int
@@ -408,6 +410,7 @@ func (*RefGetRef) ReqType(_ RefSafeTestId, _ *RefGetRefReply) string { return "R
 func setupRefSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeSpawn, _ bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(RefSafeState{Counter: req.Value})
 			return actor.OK, nil
 		})
@@ -511,6 +514,7 @@ func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
 	// 注册两个 handler：一个正常获取，一个慢获取（用于超时）
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeSpawn, _ bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(RefSafeState{Counter: req.Value})
 			return actor.OK, nil
 		})

@@ -58,6 +58,7 @@ type NodeConfig struct {
 	NodeID   string
 	Addr     string
 	Seeds    string
+	DataDir  string // Grain 持久化目录；为空时默认 "./data"
 }
 
 // ─── StartNode ───
@@ -65,8 +66,12 @@ type NodeConfig struct {
 func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership, error) {
 	mgr := actor.NewManager()
 
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
 	pm := grain.NewPersistenceManager(
-		grain.WithDriver(grain.NewJsonDriver("./data")),
+		grain.WithDriver(grain.NewJsonDriver(dataDir)),
 		grain.WithNodeId(cfg.NodeID),
 	)
 

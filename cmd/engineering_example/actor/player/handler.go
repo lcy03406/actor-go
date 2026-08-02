@@ -22,7 +22,15 @@ import (
 // Register 一次性注册 handler + RPC 入口 + 集群 CheckOwnership。
 func Register(mgr *actor.Manager, rpcBld *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec], pm *grain.PersistenceManager, placement cluster.PlacementStrategy, selfID string) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[types.PlayerId, types.GrainState]) {
-		actor.RegisterSpawn(b, grain.WrapSpawnHandler2(pm, (*Login)(nil)))
+		// 玩家登录：Grain 模式。不再使用 WrapSpawn 自动激活，
+		// 改为在回调中显式 Activate，并根据返回值（创建/加载）决定初始化逻辑。
+		actor.RegisterSpawn(b, func(ctx *types.PlayerActorCtx, req *Login, spawning bool) (actor.OkReply, error) {
+			res, err := ctx.State().Activate(ctx, pm)
+			if err != nil {
+				return actor.OK, err
+			}
+			return req.Handle(ctx, spawning, res)
+		})
 		rpc.RegisterRequest(rpcBld, &Login{})
 
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*ControlAttack)(nil)))

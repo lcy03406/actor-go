@@ -19,11 +19,13 @@ type MigPlayerId struct {
 }
 
 func (id MigPlayerId) ActorType() actor.ActorType { return "Player" }
-func (id MigPlayerId) String() string              { return id.Name }
+func (id MigPlayerId) String() string             { return id.Name }
 
 // ─── 消息类型 ───
 
-type MigLogin struct{ HP int `json:"hp"` }
+type MigLogin struct {
+	HP int `json:"hp"`
+}
 
 func (*MigLogin) ReqType(_ MigPlayerId, _ actor.OkReply) string { return "Login" }
 
@@ -196,6 +198,7 @@ func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 	// 注册 CheckOwnership handler
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			selfID := "node-1"
 			target, leave := cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())
 			if leave {
@@ -213,6 +216,7 @@ func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 		})
 
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigLogin, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			ctx.SetState(MigPlayerData{HP: req.HP, InBattle: false})
 			return actor.OK, nil
 		})
@@ -233,8 +237,8 @@ func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 		_ = inBattle
 	}
 
-	createAndSetBattle("alice", 100, false)  // 空闲
-	createAndSetBattle("bob", 100, true)     // 战斗中
+	createAndSetBattle("alice", 100, false) // 空闲
+	createAndSetBattle("bob", 100, true)    // 战斗中
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -263,6 +267,7 @@ func TestMigrationCoordinator_Basic(t *testing.T) {
 	// 注册 Player Group 的 CheckOwnership
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
 			selfID := membership.Self().ID
 			cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())
@@ -329,6 +334,7 @@ func TestMigrationCoordinator_MemberLeft(t *testing.T) {
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			atomic.AddInt32(&checkOwnershipCalled, 1)
 			members := membership.Members()
 			selfID := membership.Self().ID
@@ -398,6 +404,7 @@ func TestMigrationCoordinator_DynamicMembership(t *testing.T) {
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
 			selfID := membership.Self().ID
 			target, leave := cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())
@@ -759,6 +766,7 @@ func TestMigrationCoordinator_HeterogeneousPlacement(t *testing.T) {
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
 			selfID := membership.Self().ID
 			target, leave := cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())
@@ -830,11 +838,13 @@ func TestMigration_BatchCheckOwnership(t *testing.T) {
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigLogin, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			ctx.SetState(MigPlayerData{HP: req.HP, InBattle: false})
 			return actor.OK, nil
 		})
 
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
 			selfID := membership.Self().ID
 			_, leave := cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())

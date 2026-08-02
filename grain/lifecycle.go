@@ -15,20 +15,38 @@
 //	)
 //
 //	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, *grain.State[PlayerId, PlayerData, PlayerSnapshot]]) {
-//	    actor.RegisterSpawn(b, grain.WrapSpawn(pm, handleLogin))
+//	    actor.RegisterSpawn(b, func(ctx *ActorContext[PlayerId, *grain.State[...]], req *Login, spawning bool) (actor.OkReply, error) {
+//	        res, err := ctx.State().Activate(ctx, pm)
+//	        if err != nil {
+//	            return actor.OK, err
+//	        }
+//	        if res == grain.ActivateCreated {
+//	            ctx.State().Data.HP = req.InitHP // 首次激活：初始化数据
+//	        }
+//	        return actor.OK, nil
+//	    })
 //	    actor.RegisterQuery(b, handlePing)
 //	})
 //
-//	func handleLogin(ctx *ActorContext[PlayerId, *grain.State[PlayerId, PlayerData, PlayerSnapshot]], ...) {
-//	    ctx.State().Data.HP = 100
-//	    ctx.State().Persist(ctx) // 保存数据 + 续租
-//	}
+//	func handlePing(ctx *ActorContext[PlayerId, *grain.State[...]], ...) { ... }
 package grain
 
 import (
 	"errors"
 
 	"github.com/lcy03406/actor-go/actor"
+)
+
+// ─── ActivateResult ───
+
+// ActivateResult 表示 Activate 的结果：数据是新建的还是从存储加载的。
+type ActivateResult int
+
+const (
+	// ActivateCreated 表示数据不存在，使用零值初始化（首次激活）。
+	ActivateCreated ActivateResult = iota
+	// ActivateLoaded 表示数据已从存储加载成功。
+	ActivateLoaded
 )
 
 // ─── State ───
@@ -42,11 +60,12 @@ type State[A actor.ActorId, D any, S any, T Snapshotter[D, S]] struct {
 }
 
 // Deactivate 保存 Data、释放租约、退出 Grain。
-// 必须在 Grain 模式下调用（State.pm 不为 nil），否则 panic。
+// 必须在 Grain 激活后调用（State.pm 不为 nil），否则 panic。
+// 激活方式：在 spawn/serve 回调中调用 State.Activate(ctx, pm)。
 func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S, T]]) {
 	if s.pm == nil {
 		panic("grain: Deactivate called without PersistenceManager. " +
-			"Use grain.WrapSpawnHandler2 or pass pm to RegisterHandlers.")
+			"Activate the Grain first via State.Activate(ctx, pm) in a spawn/serve handler.")
 	}
 	id := ctx.Id()
 	actorType := string(id.ActorType())
@@ -73,11 +92,11 @@ func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S,
 
 // Persist 主动保存 Data 并续租，不退出 Grain。
 // 每次调用都会续租，重置租约 TTL。
-// 必须在 Grain 模式下调用（State.pm 不为 nil），否则 panic。
+// 必须在 Grain 激活后调用（State.pm 不为 nil），否则 panic。
 func (s *State[A, D, S, T]) Persist(ctx *actor.ActorContext[A, State[A, D, S, T]]) error {
 	if s.pm == nil {
 		panic("grain: Persist called without PersistenceManager. " +
-			"Use grain.WrapSpawnHandler2 or pass pm to RegisterHandlers.")
+			"Activate the Grain first via State.Activate(ctx, pm) in a spawn/serve handler.")
 	}
 	var gen int64
 	if s.lease != nil {
@@ -91,10 +110,40 @@ func (s *State[A, D, S, T]) toSnapshot() *S {
 	return t.TakeSnapshot(&s.Data)
 }
 
-// ─── 生命周期内部函数 ───
+// ─── 生命周期 ───
+
+// Activate 续租 / 加载或创建数据，并将 Actor 置为活跃状态。
+//
+// 必须在 spawn/serve 回调中显式调用（框架不再自动激活）。
+// 它内部完成：
+//  1. 通过 Driver.Load 原子地"获取租约 + 加载快照"（或 ErrNotFound 时用零值创建）
+//  2. 调用 ActorContext.Open 将 Actor 唤醒为活跃态
+//
+// 返回值表明数据是首次创建（ActivateCreated）还是从存储加载（ActivateLoaded）。
+// 调用方据此决定是否需要初始化业务数据。
+//
+// 若 Actor 已通过其他方式 Open（例如非 Grain 场景），Activate 仍会执行加载与续租，
+// 并安全地成为活跃态的无操作 Open。
+//
+// 示例：
+//
+//	res, err := ctx.State().Activate(ctx, pm)
+//	if err != nil { return ..., err }
+//	if res == grain.ActivateCreated {
+//	    ctx.State().Data.HP = req.InitHP // 首次激活初始化
+//	}
+func (s *State[A, D, S, T]) Activate(ctx *actor.ActorContext[A, State[A, D, S, T]], pm *PersistenceManager) (ActivateResult, error) {
+	res, err := activate(ctx, pm)
+	if err != nil {
+		return res, err
+	}
+	ctx.Open()
+	return res, nil
+}
 
 // activate 激活 Grain：通过 Driver.Load 原子完成"获取租约 + 加载快照"。
-func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.ActorContext[A, State[A, D, S, T]], pm *PersistenceManager) error {
+// 返回数据是新建的还是加载的。
+func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.ActorContext[A, State[A, D, S, T]], pm *PersistenceManager) (ActivateResult, error) {
 	id := ctx.Id()
 	actorType := string(id.ActorType())
 
@@ -107,68 +156,21 @@ func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.Act
 		if errors.As(err, &taken) {
 			ctx.Logger().Warn("grain activate: lease taken by another owner",
 				"id", id, "owner", taken.Owner, "generation", taken.Generation)
+			return ActivateLoaded, err
 		} else if errors.Is(err, ErrNotFound) {
 			// 首次激活，lease 仍然有效，数据用零值
-		} else {
-			ctx.Logger().Error("grain activate: load failed", "id", id, "err", err)
-			return err
+			state.pm = pm
+			state.lease = lease
+			ctx.Logger().Info("grain activated (created)", "id", id, "generation", lease.Generation)
+			return ActivateCreated, nil
 		}
+		ctx.Logger().Error("grain activate: load failed", "id", id, "err", err)
+		return ActivateLoaded, err
 	}
 
-	if err == nil {
-		t.LoadSnapshot(&state.Data, snapshot)
-	}
+	t.LoadSnapshot(&state.Data, snapshot)
 	state.pm = pm
 	state.lease = lease
-	ctx.Logger().Info("grain activated", "id", id, "generation", lease.Generation)
-	return nil
-}
-
-// ─── handler 包装 ───
-
-// WrapSpawn 包装 handler，spawning 时自动执行激活（获取租约 + 加载数据）。
-// 用于 actor.RegisterSpawn / RegisterServe。
-// D 需实现 Snapshotter[S]，由 State[A, D, S, T] 的 D 推导。
-func WrapSpawn[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
-	pm *PersistenceManager,
-	fn func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error),
-) func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error) {
-	return func(actx *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
-		if spawning {
-			if err := activate(actx, pm); err != nil {
-				var zero R
-				return zero, err
-			}
-		}
-		return fn(actx, req, spawning)
-	}
-}
-
-func WrapSpawnHandler[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.RequestHandler[A, State[A, D, S, T], R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
-	pm *PersistenceManager,
-) func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error) {
-	return func(actx *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
-		if spawning {
-			if err := activate(actx, pm); err != nil {
-				var zero R
-				return zero, err
-			}
-		}
-		return req.Handle(actx, spawning)
-	}
-}
-
-func WrapSpawnHandler2[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.RequestHandler[A, State[A, D, S, T], R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
-	pm *PersistenceManager,
-	_ Q,
-) func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error) {
-	return func(actx *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
-		if spawning {
-			if err := activate(actx, pm); err != nil {
-				var zero R
-				return zero, err
-			}
-		}
-		return req.Handle(actx, spawning)
-	}
+	ctx.Logger().Info("grain activated (loaded)", "id", id, "generation", lease.Generation)
+	return ActivateLoaded, nil
 }

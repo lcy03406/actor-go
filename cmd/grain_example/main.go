@@ -76,16 +76,22 @@ func (*ForceSave) ReqType(_ PlayerId, _ *SaveReply) string { return "ForceSave" 
 
 func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 	actor.Serve(mgr, 100, func(b *RegBuilder) {
-		// WrapSpawn: on first message, acquires lease + loads persisted state,
-		// then calls the handler. If state doesn't exist, starts with zero-value PlayerData.
-		actor.RegisterSpawn(b, grain.WrapSpawn(pm,
-			func(ctx *GrainCtx, req *Login, _ bool) (actor.OkReply, error) {
-				ctx.State().Data.HP = req.InitHP
-				ctx.State().Data.Level = req.InitLevel
+		// 不再使用 WrapSpawn：用户在 spawn 回调中显式调用 State.Activate，
+		// 返回值表明数据是首次创建（ActivateCreated）还是从存储加载（ActivateLoaded）。
+		actor.RegisterSpawn(b,
+			func(ctx *GrainCtx, req *Login, spawning bool) (actor.OkReply, error) {
+				res, err := ctx.State().Activate(ctx, pm)
+				if err != nil {
+					return actor.OK, err
+				}
+				if res == grain.ActivateCreated {
+					ctx.State().Data.HP = req.InitHP
+					ctx.State().Data.Level = req.InitLevel
+				}
 				ctx.State().Persist(ctx) // save + renew lease
-				ctx.Logger().Info("grain login", "hp", req.InitHP, "level", req.InitLevel)
+				ctx.Logger().Info("grain login", "hp", ctx.State().Data.HP, "level", ctx.State().Data.Level, "created", res == grain.ActivateCreated)
 				return actor.OK, nil
-			}))
+			})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *Attack, _ bool) (*AttackReply, error) {
 			ctx.State().Data.HP -= req.Damage

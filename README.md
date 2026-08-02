@@ -52,7 +52,7 @@ actor-go/
 │   ├── json.go               # JSON codec + transport
 │   └── registry.go           # RPC request registry
 ├── grain/                    # persistent Grain Actor
-│   ├── lifecycle.go          # activate (lease + load), WrapSpawn
+│   ├── lifecycle.go          # Activate (lease + load, returns loaded/created)
 │   ├── manager.go            # PersistenceManager
 │   ├── snapshot.go           # Snapshotter interface + ShotSelf
 │   ├── driver_json.go        # JSON file driver
@@ -180,6 +180,7 @@ mgr := actor.NewManager()
 actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
     // RegisterSpawn: first message creates the Actor (fire-and-forget)
     actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+        ctx.Open() // 框架不再在 spawn 时自动激活，需显式 Open 保持活跃
         ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
         return actor.OK, nil
     })
@@ -325,6 +326,7 @@ actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req 
     ctx.Logger()          // *slog.Logger
     ctx.Context()         // context.Context (cancelled on Actor exit)
     ctx.Quit()            // request exit (drain mailbox first)
+    ctx.Open()            // activate: leave idle state (opposite of Quit); spawn handlers must call this or Activate to keep the Actor alive
     ctx.Ref(id)           // get a direct reference to another Actor (bypasses Group lookup)
     ctx.Timer(d, fn)      // schedule delayed callback, returns timer ID
     ctx.StopTimer(id)     // cancel a scheduled timer
@@ -530,7 +532,9 @@ rpc.Broadcast(client, &Close{})
 
 ## Grain — Persistent Actor
 
-Grain adds **lease-managed persistence** to Actors. Each Grain Actor is automatically activated on first message: acquire a distributed lease, load persisted state from storage, and start periodic lease renewal. On deactivation, state is saved and the lease is released.
+Grain adds **lease-managed persistence** to Actors. On the first (spawn) message you explicitly call `State.Activate(ctx, pm)`: it acquires a distributed lease, loads persisted state (or starts fresh if none exists), and opens the Actor — returning whether the data was **loaded** or **created**. On deactivation, state is saved and the lease is released.
+
+Actors are **not** activated automatically before handling the spawn message. You decide when to activate by calling `ctx.Open()` (plain Actors) or `ctx.State().Activate(ctx, pm)` (Grain), inside the spawn/serve callback. If you don't activate, the Actor stays idle after the message and is destroyed on idle (or re-activated by the next spawn message).
 
 ### Concepts
 
@@ -540,7 +544,7 @@ Grain adds **lease-managed persistence** to Actors. Each Grain Actor is automati
 | **Driver** | Loads/saves snapshots (JSON, YAML, Redis, MongoDB) |
 | **Lease** | Distributed lock ensuring single-ownership across nodes |
 | **Snapshotter** | Converts business data to/from persistable snapshots |
-| **WrapSpawn** | Wraps spawn handler to auto-activate on first message |
+| **Activate** | Explicit activation in spawn callback: returns `ActivateCreated` / `ActivateLoaded` |
 
 ### Quick Example
 
@@ -568,15 +572,20 @@ pm := grain.NewPersistenceManager(
     grain.WithRenewInterval(30*time.Second),
 )
 
-// Register with WrapSpawn
+// Register: spawn handler explicitly activates the Grain
 actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
-    actor.RegisterSpawn(b, grain.WrapSpawn(pm,
-        func(ctx *actor.ActorContext[PlayerId, GrainState], req *Login, _ bool) (actor.OkReply, error) {
+    actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Login, _ bool) (actor.OkReply, error) {
+        res, err := ctx.State().Activate(ctx, pm)
+        if err != nil {
+            return actor.OK, err
+        }
+        if res == grain.ActivateCreated { // 首次创建才初始化
             ctx.State().Data.HP = req.InitHP
             ctx.State().Data.Level = req.InitLevel
-            ctx.State().Persist(ctx)  // save immediately
-            return actor.OK, nil
-        }))
+        }
+        ctx.State().Persist(ctx)  // save immediately
+        return actor.OK, nil
+    })
 
     actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Attack, _ bool) (*AttackReply, error) {
         ctx.State().Data.HP -= req.Damage

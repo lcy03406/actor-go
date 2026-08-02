@@ -116,6 +116,7 @@ func TestRouter_LocalPost(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
 			received = req.Msg
 			mu.Unlock()
@@ -153,6 +154,7 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
 			count++
 			mu.Unlock()
@@ -187,6 +189,7 @@ func TestRouter_LocalMulticast(t *testing.T) {
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
 			count++
 			mu.Unlock()
@@ -485,6 +488,7 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
 			localCount++
 			mu.Unlock()

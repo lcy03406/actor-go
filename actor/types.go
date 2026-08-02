@@ -59,3 +59,22 @@ type Ok = struct{}
 type OkReply = *Ok
 
 var OK OkReply = &Ok{}
+
+// PanicReq 是框架在 handler panic 时投递给用户的内置消息。
+//
+// 用户通过 RegisterServe(b, (*PanicReq[ActorId])(nil)) 注册 recovery handler，
+// 在 Handle 中读取 Err 自行决定后续行为：
+//   - Persist / Save：把（可能不完整的）数据落盘；
+//   - Open()：继续运行（忽略本次 panic）；
+//   - Quit()：主动退出。
+//
+// 若用户未注册 PanicReq 的 handler，框架仅记录日志，actor 保持存活
+// （panic 不会强制销毁 actor）。
+//
+// 注意：panic 恢复后 actor 的 ctx 会被原样保留（idle 状态按 panic 前 settle），
+// 下一轮消息处理会取出这条 PanicReq 交给用户 handler。
+type PanicReq[A ActorId] struct {
+	Err error
+}
+
+func (*PanicReq[A]) ReqType(_ A, _ *Ok) string { return "__panic__" }

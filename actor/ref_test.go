@@ -18,7 +18,7 @@ type RefTestId struct {
 }
 
 func (id RefTestId) ActorType() actor.ActorType { return "RefTest" }
-func (id RefTestId) String() string              { return "RefTest(" + id.Name + ")" }
+func (id RefTestId) String() string             { return "RefTest(" + id.Name + ")" }
 
 type RefTestState struct {
 	Counter int32
@@ -58,6 +58,7 @@ func (*RefTestClose) ReqType(_ RefTestId, _ actor.OkReply) string { return "RefT
 
 func registerRefTestBase(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 	actor.RegisterSpawn(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *RefTestInit, _ bool) (actor.OkReply, error) {
+		a.Open() // spawn 后保持活跃（框架不再自动激活）
 		a.SetState(RefTestState{Value: req.Value})
 		return actor.OK, nil
 	})

@@ -77,6 +77,7 @@ func (*TestLoginWithReply) ReqType(_ TestActorId, _ *TestAddReply) string {
 func setupManager(mgr *actor.Manager) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -232,6 +233,7 @@ func TestActorTimer(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			// 设置定时器：50ms 后修改状态
 			a.Timer(50*time.Millisecond, func() {
@@ -263,6 +265,7 @@ func TestActorTimerCancel(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			// 设置定时器并立即取消
 			timer := a.Timer(50*time.Millisecond, func() {
@@ -295,6 +298,7 @@ func TestActorMulticast(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -339,6 +343,7 @@ func TestActorRequestSpawn(t *testing.T) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterServe(b,
 			func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLoginWithReply, spawning bool) (*TestAddReply, error) {
+				a.Open() // spawn 后保持活跃（框架不再自动激活）
 				a.SetState(TestActorData{Int: req.Data.Int})
 				return &TestAddReply{Result: a.State().Int}, nil
 			})
@@ -379,6 +384,7 @@ func TestActorSpawningFlag(t *testing.T) {
 		// 在 Actor 已存在时也被调用，从而触发 spawning=false 分支。
 		actor.RegisterServe(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
 			if spawning {
+				a.Open()                          // spawn 后保持活跃（框架不再自动激活）
 				a.SetState(TestActorData{Int: 1}) // spawning=true 时初始化
 			} else {
 				a.State().Int += 100 // spawning=false 时追加
@@ -438,6 +444,7 @@ func TestActorCallTimeoutExceeded(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -525,6 +532,7 @@ func TestMultiGroup(t *testing.T) {
 	// 注册 Group1：TestActorId + TestActorData
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -537,6 +545,7 @@ func TestMultiGroup(t *testing.T) {
 	// 注册 Group2：TestActorId2 + TestActorData2
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId2, TestActorData2]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId2, TestActorData2], req *TestSpawn2, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData2{Value: req.Val})
 			return actor.OK, nil
 		})
@@ -599,6 +608,7 @@ func TestMultiGroupTypeSafety(t *testing.T) {
 
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -606,6 +616,7 @@ func TestMultiGroupTypeSafety(t *testing.T) {
 
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId2, TestActorData2]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId2, TestActorData2], req *TestSpawn2, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData2{Value: req.Val})
 			return actor.OK, nil
 		})
@@ -701,6 +712,7 @@ func TestCloseActorGraceful(t *testing.T) {
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -753,6 +765,7 @@ func TestKillActorInterrupts(t *testing.T) {
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -810,6 +823,7 @@ func TestCloseActorDrainsMailbox(t *testing.T) {
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -937,6 +951,7 @@ func TestCloseJoinManager(t *testing.T) {
 
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -1061,6 +1076,7 @@ func TestKillDrainsMailbox(t *testing.T) {
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -1146,6 +1162,7 @@ func TestTimerCancelledOnQuit(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -1187,6 +1204,7 @@ func TestTimerCancelledOnClose(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			a.Timer(100*time.Millisecond, func() {
 				timerFired.Store(true)
@@ -1222,6 +1240,7 @@ func TestTimerCancelledOnKill(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			a.Timer(100*time.Millisecond, func() {
 				timerFired.Store(true)
@@ -1259,6 +1278,7 @@ func TestActorHandlerPanic(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})
@@ -1442,6 +1462,7 @@ func TestActorFinalizeWithInFlight(t *testing.T) {
 
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestActorId, TestActorData], req *TestLogin, spawning bool) (actor.OkReply, error) {
+			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestActorData{Int: req.Data.Int})
 			return actor.OK, nil
 		})

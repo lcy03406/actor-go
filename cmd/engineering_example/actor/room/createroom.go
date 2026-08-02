@@ -17,6 +17,7 @@ func (*CreateRoom) ReqType(_ RoomId, _ actor.OkReply) string { return "CreateRoo
 
 func (req *CreateRoom) Handle(ctx *actor.ActorContext[RoomId, RoomState], spawning bool) (actor.OkReply, error) {
 	ctx.SetState(RoomState{MaxPlayers: req.MaxPlayers, Players: []types.PlayerId{}})
+	ctx.Open() // 房间创建后保持活跃（否则处理完 spawn 消息后会被回收）
 	log.Printf("[Room] %s 创建 最大人数=%d", ctx.Id(), req.MaxPlayers)
 	return actor.OK, nil
 }

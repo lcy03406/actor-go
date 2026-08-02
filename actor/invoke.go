@@ -57,14 +57,14 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Fail(err error) {
 	}
 }
 
-// panicRecoverInvoke 是 handler panic 恢复后插入的占位消息，
-// 不调用用户 handler，只打日志。后续请求照常处理。
-type panicRecoverInvoke[A ActorId, S anyState] struct {
+// panicDropInvoke 是 handler panic 且用户未注册 PanicReq recovery handler 时，
+// 用于原地替换原消息的安全占位：Invoke 为空操作（不再次 panic），
+// Fail 为空操作。actor 保持存活——ctx 原样保留，idle 状态按 panic 前 settle，
+// 本轮结束后 actor 回到空闲池，等待后续消息。
+type panicDropInvoke[A ActorId, S anyState] struct {
 	err error
 }
 
-func (p *panicRecoverInvoke[A, S]) Allow(_ A, _ bool) bool { return true }
-func (p *panicRecoverInvoke[A, S]) Invoke(actor *ActorContext[A, S], _ bool) {
-	actor.Logger().Warn("handler panic recovered, resuming", "err", p.err)
-}
-func (p *panicRecoverInvoke[A, S]) Fail(_ error) {}
+func (p *panicDropInvoke[A, S]) Allow(_ A, _ bool) bool          { return true }
+func (p *panicDropInvoke[A, S]) Invoke(_ *ActorContext[A, S], _ bool) {}
+func (p *panicDropInvoke[A, S]) Fail(_ error)                    {}

@@ -145,6 +145,7 @@ func TestRouter_CallNormal(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &LeasePong{Msg: req.Msg + "-pong"}, nil
 		})
 	})
@@ -174,6 +175,7 @@ func TestRouter_PostNormal(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			received = req.Msg
 			return &LeasePong{Msg: "ok"}, nil
 		})
@@ -205,6 +207,7 @@ func TestRouter_CallWithForceReleaser_Normal(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
+			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &LeasePong{Msg: req.Msg + "-pong"}, nil
 		})
 	})
