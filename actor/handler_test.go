@@ -19,7 +19,7 @@ type HandlerTestId struct {
 }
 
 func (id HandlerTestId) ActorType() actor.ActorType { return "HandlerTest" }
-func (id HandlerTestId) String() string              { return "HandlerTest(" + id.Name + ")" }
+func (id HandlerTestId) String() string             { return "HandlerTest(" + id.Name + ")" }
 
 type HandlerTestState struct {
 	Value int
@@ -109,16 +109,6 @@ func setupHandlerManager(mgr *actor.Manager) {
 		actor.RegisterQueryHandler[HandlerTestId, HandlerTestState, *HandlerClose](b)
 		actor.RegisterQueryHandler[HandlerTestId, HandlerTestState, *HandlerSlow](b)
 	})
-}
-
-func setupHandlerSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
-		actor.RegisterSpawnHandler[HandlerTestId, HandlerTestState, *HandlerSpawn](b)
-		actor.RegisterQueryHandler[HandlerTestId, HandlerTestState, *HandlerSafe](b)
-		actor.RegisterQueryHandler[HandlerTestId, HandlerTestState, *HandlerClose](b)
-	})
-	// 将 cleaned 注入到请求中（模拟携带外部状态）
-	_ = cleaned
 }
 
 // ============================================================

@@ -125,11 +125,40 @@ func WrapSpawn[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.Reque
 ) func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error) {
 	return func(actx *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
 		if spawning {
-			if err := activate[A, D, S, T](actx, pm); err != nil {
+			if err := activate(actx, pm); err != nil {
 				var zero R
 				return zero, err
 			}
 		}
 		return fn(actx, req, spawning)
+	}
+}
+
+func WrapSpawnHandler[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.RequestHandler[A, State[A, D, S, T], R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	pm *PersistenceManager,
+) func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error) {
+	return func(actx *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
+		if spawning {
+			if err := activate(actx, pm); err != nil {
+				var zero R
+				return zero, err
+			}
+		}
+		return req.Handle(actx, spawning)
+	}
+}
+
+func WrapSpawnHandler2[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.RequestHandler[A, State[A, D, S, T], R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
+	pm *PersistenceManager,
+	_ Q,
+) func(*actor.ActorContext[A, State[A, D, S, T]], Q, bool) (R, error) {
+	return func(actx *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
+		if spawning {
+			if err := activate(actx, pm); err != nil {
+				var zero R
+				return zero, err
+			}
+		}
+		return req.Handle(actx, spawning)
 	}
 }

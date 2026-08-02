@@ -75,3 +75,33 @@ func RegisterServeHandler[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R
 	}
 	register(b, true, true, fn)
 }
+
+func RegisterSpawnHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
+	b *RegistryBuilder[A, S],
+	_ Q,
+) {
+	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		return req.Handle(actor, spawning)
+	}
+	register(b, true, false, fn)
+}
+
+func RegisterQueryHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
+	b *RegistryBuilder[A, S],
+	_ Q,
+) {
+	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		return req.Handle(actor, spawning)
+	}
+	register(b, false, true, fn)
+}
+
+func RegisterServeHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
+	b *RegistryBuilder[A, S],
+	_ Q,
+) {
+	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		return req.Handle(actor, spawning)
+	}
+	register(b, true, true, fn)
+}
