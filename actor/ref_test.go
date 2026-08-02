@@ -4,9 +4,9 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/lcy03406/actor-go/actor"
+	"github.com/lcy03406/actor-go/internal/testutil"
 )
 
 // ============================================================
@@ -30,6 +30,11 @@ type RefTestState struct {
 type RefTestInit struct{ Value string }
 
 func (*RefTestInit) ReqType(_ RefTestId, _ actor.OkReply) string { return "RefTestInit" }
+func (req *RefTestInit) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	a.Open() // spawn 后保持活跃（框架不再自动激活）
+	a.SetState(RefTestState{Value: req.Value})
+	return actor.OK, nil
+}
 
 type RefTestGet struct{}
 
@@ -39,43 +44,43 @@ type RefTestGetReply struct {
 }
 
 func (*RefTestGet) ReqType(_ RefTestId, _ *RefTestGetReply) string { return "RefTestGet" }
+func (req *RefTestGet) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*RefTestGetReply, error) {
+	return &RefTestGetReply{Value: a.State().Value, Counter: a.State().Counter}, nil
+}
 
 type RefTestAdd struct{ Delta int32 }
 
 type RefTestAddReply struct{ Result int32 }
 
 func (*RefTestAdd) ReqType(_ RefTestId, _ *RefTestAddReply) string { return "RefTestAdd" }
+func (req *RefTestAdd) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*RefTestAddReply, error) {
+	a.State().Counter += req.Delta
+	return &RefTestAddReply{Result: a.State().Counter}, nil
+}
 
 type RefTestPing struct{}
 
 func (*RefTestPing) ReqType(_ RefTestId, _ actor.OkReply) string { return "RefTestPing" }
+func (req *RefTestPing) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	return actor.OK, nil
+}
 
 type RefTestClose struct{}
 
 func (*RefTestClose) ReqType(_ RefTestId, _ actor.OkReply) string { return "RefTestClose" }
+func (req *RefTestClose) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	a.Quit()
+	return actor.OK, nil
+}
 
 // ─── 注册构建器：注册基础 handler ───
 
 func registerRefTestBase(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
-	actor.RegisterSpawn(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *RefTestInit, _ bool) (actor.OkReply, error) {
-		a.Open() // spawn 后保持活跃（框架不再自动激活）
-		a.SetState(RefTestState{Value: req.Value})
-		return actor.OK, nil
-	})
-	actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *RefTestGet, _ bool) (*RefTestGetReply, error) {
-		return &RefTestGetReply{Value: a.State().Value, Counter: a.State().Counter}, nil
-	})
-	actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *RefTestAdd, _ bool) (*RefTestAddReply, error) {
-		a.State().Counter += req.Delta
-		return &RefTestAddReply{Result: a.State().Counter}, nil
-	})
-	actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *RefTestPing, _ bool) (actor.OkReply, error) {
-		return actor.OK, nil
-	})
-	actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *RefTestClose, _ bool) (actor.OkReply, error) {
-		a.Quit()
-		return actor.OK, nil
-	})
+	actor.RegisterSpawnHandler[RefTestId, RefTestState, *RefTestInit](b)
+	actor.RegisterQueryHandler[RefTestId, RefTestState, *RefTestGet](b)
+	actor.RegisterQueryHandler[RefTestId, RefTestState, *RefTestAdd](b)
+	actor.RegisterQueryHandler[RefTestId, RefTestState, *RefTestPing](b)
+	actor.RegisterQueryHandler[RefTestId, RefTestState, *RefTestClose](b)
 }
 
 func spawnRefTestActor(mgr *actor.Manager, name, value string) RefTestId {
@@ -101,6 +106,18 @@ type refTestGetRefReply struct {
 }
 
 func (*refTestGetRefReq) ReqType(_ RefTestId, _ *refTestGetRefReply) string { return "RefTestGetRef" }
+func (req *refTestGetRefReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*refTestGetRefReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return &refTestGetRefReply{}, nil
+	}
+	defer ref.Release()
+	r, err := actor.RefCall(context.Background(), ref, &RefTestGet{})
+	if err != nil {
+		return nil, err
+	}
+	return &refTestGetRefReply{TargetValue: r.Value}, nil
+}
 
 type refTestRefPostReq struct {
 	TargetId RefTestId
@@ -108,6 +125,14 @@ type refTestRefPostReq struct {
 }
 
 func (*refTestRefPostReq) ReqType(_ RefTestId, _ actor.OkReply) string { return "RefTestRefPost" }
+func (req *refTestRefPostReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return nil, &actor.ActorNotFoundError{}
+	}
+	defer ref.Release()
+	return actor.OK, actor.RefPost(ref, &RefTestAdd{Delta: req.Delta})
+}
 
 type refTestRefNotFoundReq struct {
 	TargetId RefTestId
@@ -115,6 +140,13 @@ type refTestRefNotFoundReq struct {
 
 func (*refTestRefNotFoundReq) ReqType(_ RefTestId, _ actor.OkReply) string {
 	return "RefTestRefNotFound"
+}
+func (req *refTestRefNotFoundReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref != nil {
+		ref.Release()
+	}
+	return actor.OK, nil
 }
 
 type refTestReleaseReq struct {
@@ -129,6 +161,16 @@ type refTestReleaseReply struct {
 func (*refTestReleaseReq) ReqType(_ RefTestId, _ *refTestReleaseReply) string {
 	return "RefTestRelease"
 }
+func (req *refTestReleaseReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*refTestReleaseReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return &refTestReleaseReply{}, nil
+	}
+	beforeValid := ref.Valid()
+	ref.Release()
+	afterValid := ref.Valid()
+	return &refTestReleaseReply{BeforeValid: beforeValid, AfterValid: afterValid}, nil
+}
 
 type refTestIdempotentReq struct {
 	TargetId RefTestId
@@ -136,6 +178,16 @@ type refTestIdempotentReq struct {
 
 func (*refTestIdempotentReq) ReqType(_ RefTestId, _ actor.OkReply) string {
 	return "RefTestIdempotent"
+}
+func (req *refTestIdempotentReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return nil, &actor.ActorNotFoundError{}
+	}
+	ref.Release()
+	ref.Release()
+	ref.Release()
+	return actor.OK, nil
 }
 
 type refTestPreventExitReq struct {
@@ -149,6 +201,24 @@ type refTestPreventExitReply struct {
 func (*refTestPreventExitReq) ReqType(_ RefTestId, _ *refTestPreventExitReply) string {
 	return "RefTestPreventExit"
 }
+func (req *refTestPreventExitReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*refTestPreventExitReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return &refTestPreventExitReply{}, nil
+	}
+	_, err := actor.Call(context.Background(), a.Manager(), req.TargetId, &RefTestClose{})
+	if err != nil {
+		ref.Release()
+		return nil, err
+	}
+	testutil.Settle()
+
+	refValid := ref.Valid()
+	ref.Release()
+	return &refTestPreventExitReply{
+		RefValidAfterQuit: refValid,
+	}, nil
+}
 
 type refTestReleaseExitReq struct {
 	TargetId RefTestId
@@ -156,6 +226,24 @@ type refTestReleaseExitReq struct {
 
 func (*refTestReleaseExitReq) ReqType(_ RefTestId, _ actor.OkReply) string {
 	return "RefTestReleaseExit"
+}
+func (req *refTestReleaseExitReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return nil, &actor.ActorNotFoundError{}
+	}
+	ref.Release()
+
+	_, err := actor.Call(context.Background(), a.Manager(), req.TargetId, &RefTestClose{})
+	if err != nil {
+		return nil, err
+	}
+	testutil.Settle()
+
+	if ref.Valid() {
+		return actor.OK, nil
+	}
+	return actor.OK, nil
 }
 
 type refTestIdReq struct {
@@ -167,13 +255,35 @@ type refTestIdReply struct {
 }
 
 func (*refTestIdReq) ReqType(_ RefTestId, _ *refTestIdReply) string { return "RefTestId" }
+func (req *refTestIdReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*refTestIdReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return &refTestIdReply{}, nil
+	}
+	defer ref.Release()
+	return &refTestIdReply{Match: ref.Id().Name == req.TargetId.Name}, nil
+}
 
 type refTestCtxCancelReq struct {
 	TargetId RefTestId
+	GotErr   error
 }
 
 func (*refTestCtxCancelReq) ReqType(_ RefTestId, _ actor.OkReply) string {
 	return "RefTestCtxCancel"
+}
+func (req *refTestCtxCancelReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return nil, &actor.ActorNotFoundError{}
+	}
+	defer ref.Release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, req.GotErr = actor.RefCall(ctx, ref, &RefTestGet{})
+	return actor.OK, nil
 }
 
 type refTestConcurrentReq struct {
@@ -182,6 +292,25 @@ type refTestConcurrentReq struct {
 
 func (*refTestConcurrentReq) ReqType(_ RefTestId, _ actor.OkReply) string {
 	return "RefTestConcurrent"
+}
+func (req *refTestConcurrentReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (actor.OkReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return nil, &actor.ActorNotFoundError{}
+	}
+	defer ref.Release()
+
+	var wg sync.WaitGroup
+	const numGoroutines = 50
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = actor.RefCall(context.Background(), ref, &RefTestAdd{Delta: 1})
+		}()
+	}
+	wg.Wait()
+	return actor.OK, nil
 }
 
 type refTestClosedReq struct {
@@ -195,6 +324,10 @@ type refTestClosedReply struct {
 func (*refTestClosedReq) ReqType(_ RefTestId, _ *refTestClosedReply) string {
 	return "RefTestClosed"
 }
+func (req *refTestClosedReq) Handle(a *actor.ActorContext[RefTestId, RefTestState], _ bool) (*refTestClosedReply, error) {
+	ref := a.Ref(req.TargetId)
+	return &refTestClosedReply{RefIsNil: ref == nil}, nil
+}
 
 // ============================================================
 // 功能测试
@@ -205,18 +338,7 @@ func TestActorRefBasic(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestGetRefReq, _ bool) (*refTestGetRefReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return &refTestGetRefReply{}, nil
-			}
-			defer ref.Release()
-			r, err := actor.RefCall(context.Background(), ref, &RefTestGet{})
-			if err != nil {
-				return nil, err
-			}
-			return &refTestGetRefReply{TargetValue: r.Value}, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestGetRefReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -237,14 +359,7 @@ func TestActorRefPost(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestRefPostReq, _ bool) (actor.OkReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return nil, &actor.ActorNotFoundError{}
-			}
-			defer ref.Release()
-			return actor.OK, actor.RefPost(ref, &RefTestAdd{Delta: req.Delta})
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestRefPostReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -269,13 +384,7 @@ func TestActorRefNotFound(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestRefNotFoundReq, _ bool) (actor.OkReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref != nil {
-				ref.Release()
-			}
-			return actor.OK, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestRefNotFoundReq](b)
 	})
 
 	sourceId := spawnRefTestActor(mgr, "source", "world")
@@ -293,16 +402,7 @@ func TestActorRefRelease(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestReleaseReq, _ bool) (*refTestReleaseReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return &refTestReleaseReply{}, nil
-			}
-			beforeValid := ref.Valid()
-			ref.Release()
-			afterValid := ref.Valid()
-			return &refTestReleaseReply{BeforeValid: beforeValid, AfterValid: afterValid}, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestReleaseReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -326,16 +426,7 @@ func TestActorRefReleaseIdempotent(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestIdempotentReq, _ bool) (actor.OkReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return nil, &actor.ActorNotFoundError{}
-			}
-			ref.Release()
-			ref.Release()
-			ref.Release()
-			return actor.OK, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestIdempotentReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -355,24 +446,7 @@ func TestActorRefPreventIdleExit(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestPreventExitReq, _ bool) (*refTestPreventExitReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return &refTestPreventExitReply{}, nil
-			}
-			_, err := actor.Call(context.Background(), mgr, req.TargetId, &RefTestClose{})
-			if err != nil {
-				ref.Release()
-				return nil, err
-			}
-			time.Sleep(50 * time.Millisecond)
-
-			refValid := ref.Valid()
-			ref.Release()
-			return &refTestPreventExitReply{
-				RefValidAfterQuit: refValid,
-			}, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestPreventExitReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -393,24 +467,7 @@ func TestActorRefAfterReleaseAllowsExit(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestReleaseExitReq, _ bool) (actor.OkReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return nil, &actor.ActorNotFoundError{}
-			}
-			ref.Release()
-
-			_, err := actor.Call(context.Background(), mgr, req.TargetId, &RefTestClose{})
-			if err != nil {
-				return nil, err
-			}
-			time.Sleep(50 * time.Millisecond)
-
-			if ref.Valid() {
-				return actor.OK, nil
-			}
-			return actor.OK, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestReleaseExitReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -427,14 +484,7 @@ func TestActorRefId(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestIdReq, _ bool) (*refTestIdReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return &refTestIdReply{}, nil
-			}
-			defer ref.Release()
-			return &refTestIdReply{Match: ref.Id().Name == req.TargetId.Name}, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestIdReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -455,30 +505,19 @@ func TestActorRefCallWithContextCancel(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestCtxCancelReq, _ bool) (actor.OkReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return nil, &actor.ActorNotFoundError{}
-			}
-			defer ref.Release()
-
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-
-			_, err := actor.RefCall(ctx, ref, &RefTestGet{})
-			if err != context.Canceled {
-				t.Errorf("expected context.Canceled, got %v", err)
-			}
-			return actor.OK, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestCtxCancelReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
 	sourceId := spawnRefTestActor(mgr, "source", "world")
 
 	ctx := context.Background()
-	if _, err := actor.Call(ctx, mgr, sourceId, &refTestCtxCancelReq{TargetId: targetId}); err != nil {
+	ctxCancelReq := &refTestCtxCancelReq{TargetId: targetId}
+	if _, err := actor.Call(ctx, mgr, sourceId, ctxCancelReq); err != nil {
 		t.Fatalf("Call ContextCancel test failed: %v", err)
+	}
+	if ctxCancelReq.GotErr != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", ctxCancelReq.GotErr)
 	}
 }
 
@@ -487,25 +526,7 @@ func TestActorRefConcurrent(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestConcurrentReq, _ bool) (actor.OkReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return nil, &actor.ActorNotFoundError{}
-			}
-			defer ref.Release()
-
-			var wg sync.WaitGroup
-			const numGoroutines = 50
-			for i := 0; i < numGoroutines; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					_, _ = actor.RefCall(context.Background(), ref, &RefTestAdd{Delta: 1})
-				}()
-			}
-			wg.Wait()
-			return actor.OK, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestConcurrentReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")
@@ -530,10 +551,7 @@ func TestActorRefClosedTarget(t *testing.T) {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefTestId, RefTestState], req *refTestClosedReq, _ bool) (*refTestClosedReply, error) {
-			ref := a.Ref(req.TargetId)
-			return &refTestClosedReply{RefIsNil: ref == nil}, nil
-		})
+		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestClosedReq](b)
 	})
 
 	targetId := spawnRefTestActor(mgr, "target", "hello")

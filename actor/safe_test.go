@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
+	"github.com/lcy03406/actor-go/internal/testutil"
 )
 
 // ============================================================
@@ -47,18 +48,34 @@ type SafeTestInit struct {
 }
 
 func (*SafeTestInit) ReqType(_ SafeTestId, _ actor.OkReply) string { return "SafeTestInit" }
+func (req *SafeTestInit) Handle(a *actor.ActorContext[SafeTestId, SafeTestState], _ bool) (actor.OkReply, error) {
+	a.Open() // spawn 后保持活跃（框架不再自动激活）
+	a.SetState(SafeTestState{Value: req.Value})
+	return actor.OK, nil
+}
 
 type SafeTestAdd struct {
-	Add int
+	Add     int
+	Cleaned *atomic.Bool
 }
 
 func (*SafeTestAdd) ReqType(_ SafeTestId, _ *SafeTestReply) string { return "SafeTestAdd" }
+func (req *SafeTestAdd) Handle(a *actor.ActorContext[SafeTestId, SafeTestState], _ bool) (*SafeTestReply, error) {
+	a.State().Value += req.Add
+	return &SafeTestReply{Result: a.State().Value, cleaned: req.Cleaned}, nil
+}
 
 type SafeTestSlowAdd struct {
-	Add int
+	Add     int
+	Cleaned *atomic.Bool
 }
 
 func (*SafeTestSlowAdd) ReqType(_ SafeTestId, _ *SafeTestReply) string { return "SafeTestSlowAdd" }
+func (req *SafeTestSlowAdd) Handle(a *actor.ActorContext[SafeTestId, SafeTestState], _ bool) (*SafeTestReply, error) {
+	time.Sleep(200 * time.Millisecond)
+	a.State().Value += req.Add
+	return &SafeTestReply{Result: a.State().Value, cleaned: req.Cleaned}, nil
+}
 
 type SafeTestClose struct{}
 
@@ -66,20 +83,9 @@ func (*SafeTestClose) ReqType(_ SafeTestId, _ actor.OkReply) string { return "Sa
 
 func setupSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
-		actor.RegisterSpawn(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestInit, _ bool) (actor.OkReply, error) {
-			a.Open() // spawn 后保持活跃（框架不再自动激活）
-			a.SetState(SafeTestState{Value: req.Value})
-			return actor.OK, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestAdd, _ bool) (*SafeTestReply, error) {
-			a.State().Value += req.Add
-			return &SafeTestReply{Result: a.State().Value, cleaned: cleaned}, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestSlowAdd, _ bool) (*SafeTestReply, error) {
-			time.Sleep(200 * time.Millisecond)
-			a.State().Value += req.Add
-			return &SafeTestReply{Result: a.State().Value, cleaned: cleaned}, nil
-		})
+		actor.RegisterSpawnHandler[SafeTestId, SafeTestState, *SafeTestInit](b)
+		actor.RegisterQueryHandler[SafeTestId, SafeTestState, *SafeTestAdd](b)
+		actor.RegisterQueryHandler[SafeTestId, SafeTestState, *SafeTestSlowAdd](b)
 	})
 }
 
@@ -97,10 +103,10 @@ func TestSafeCallBasic(t *testing.T) {
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 10}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
-	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 5})
+	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 5, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("SafeCall failed: %v", err)
 	}
@@ -133,13 +139,13 @@ func TestSafeCallCleanupOnTimeout(t *testing.T) {
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// 使用极短超时，handler 需要 200ms
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestSlowAdd{Add: 1})
+	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestSlowAdd{Add: 1, Cleaned: &cleaned})
 	if err == nil {
 		// 如果碰巧拿到了 reply（极少数情况），需要手动清理
 		reply.Close()
@@ -148,7 +154,7 @@ func TestSafeCallCleanupOnTimeout(t *testing.T) {
 	}
 
 	// 等待 handler 完成并触发 clean
-	time.Sleep(300 * time.Millisecond)
+	testutil.Settle(300 * time.Millisecond)
 
 	// 超时后，无人接收的 reply 应被自动 Close
 	if !cleaned.Load() {
@@ -166,19 +172,19 @@ func TestSafeCallCleanupOnContextCancel(t *testing.T) {
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // 立即取消
 
-	_, err := actor.SafeCall(ctx, mgr, id, &SafeTestSlowAdd{Add: 1})
+	_, err := actor.SafeCall(ctx, mgr, id, &SafeTestSlowAdd{Add: 1, Cleaned: &cleaned})
 	if err == nil {
 		t.Error("expected error when context is cancelled")
 		return
 	}
 
 	// 等待 handler 完成
-	time.Sleep(300 * time.Millisecond)
+	testutil.Settle(300 * time.Millisecond)
 
 	// 取消后，reply 应被自动 Close
 	if !cleaned.Load() {
@@ -196,11 +202,11 @@ func TestSafeCallCleanupNotCalledOnSuccess(t *testing.T) {
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	for i := 0; i < 5; i++ {
 		ctx := context.Background()
-		reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1})
+		reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1, Cleaned: &cleaned})
 		if err != nil {
 			t.Fatalf("SafeCall %d failed: %v", i, err)
 		}
@@ -225,13 +231,13 @@ func TestSafeCallConcurrent(t *testing.T) {
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	const N = 50
 	results := make([]int, N)
 	for i := 0; i < N; i++ {
 		ctx := context.Background()
-		reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1})
+		reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1, Cleaned: &cleaned})
 		if err != nil {
 			t.Fatalf("SafeCall %d failed: %v", i, err)
 		}
@@ -276,10 +282,10 @@ func TestSafeCallCloseIdempotent(t *testing.T) {
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
-	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1})
+	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("SafeCall failed: %v", err)
 	}
@@ -303,27 +309,20 @@ func TestSafeCallVsCall(t *testing.T) {
 
 	// 注册两个 Group：Safe 版本和普通版本
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
-		actor.RegisterSpawn(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestInit, _ bool) (actor.OkReply, error) {
-			a.Open() // spawn 后保持活跃（框架不再自动激活）
-			a.SetState(SafeTestState{Value: req.Value})
-			return actor.OK, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[SafeTestId, SafeTestState], req *SafeTestAdd, _ bool) (*SafeTestReply, error) {
-			a.State().Value += req.Add
-			return &SafeTestReply{Result: a.State().Value, cleaned: &cleaned}, nil
-		})
+		actor.RegisterSpawnHandler[SafeTestId, SafeTestState, *SafeTestInit](b)
+		actor.RegisterQueryHandler[SafeTestId, SafeTestState, *SafeTestAdd](b)
 	})
 
 	id := SafeTestId{Name: "compare"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 10}); err != nil {
 		t.Fatalf("Post Init failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
 
 	// SafeCall: reply 实现 SafeReply
-	safeReply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 5})
+	safeReply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 5, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("SafeCall failed: %v", err)
 	}
@@ -336,7 +335,7 @@ func TestSafeCallVsCall(t *testing.T) {
 	// 注意：Call 返回的是 R (PtrReply)，不会自动 Close
 	// 这里使用 Call 时，reply 是 *SafeTestReply，可以手动调用 Close
 	// 但 Call 返回类型是 PtrReply，编译器不会强制 Close
-	reply2, err := actor.Call(ctx, mgr, id, &SafeTestAdd{Add: 5})
+	reply2, err := actor.Call(ctx, mgr, id, &SafeTestAdd{Add: 5, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -379,26 +378,50 @@ type RefSafeSpawn struct {
 }
 
 func (*RefSafeSpawn) ReqType(_ RefSafeTestId, _ actor.OkReply) string { return "RefSafeSpawn" }
+func (req *RefSafeSpawn) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState], _ bool) (actor.OkReply, error) {
+	a.Open() // spawn 后保持活跃（框架不再自动激活）
+	a.SetState(RefSafeState{Counter: req.Value})
+	return actor.OK, nil
+}
 
-type RefSafeGet struct{}
+type RefSafeGet struct {
+	Cleaned *atomic.Bool
+}
 
 func (*RefSafeGet) ReqType(_ RefSafeTestId, _ *RefSafeReply) string { return "RefSafeGet" }
+func (req *RefSafeGet) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState], _ bool) (*RefSafeReply, error) {
+	return &RefSafeReply{Value: a.State().Counter, cleaned: req.Cleaned}, nil
+}
 
-type RefSafeSlowGet struct{}
+type RefSafeSlowGet struct {
+	Cleaned *atomic.Bool
+}
 
 func (*RefSafeSlowGet) ReqType(_ RefSafeTestId, _ *RefSafeReply) string { return "RefSafeSlowGet" }
+func (req *RefSafeSlowGet) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState], _ bool) (*RefSafeReply, error) {
+	time.Sleep(200 * time.Millisecond)
+	return &RefSafeReply{Value: a.State().Counter, cleaned: req.Cleaned}, nil
+}
 
 type RefSafePing struct{}
 
 func (*RefSafePing) ReqType(_ RefSafeTestId, _ actor.OkReply) string { return "RefSafePing" }
+func (req *RefSafePing) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState], _ bool) (actor.OkReply, error) {
+	return actor.OK, nil
+}
 
 type RefSafeClose struct{}
 
 func (*RefSafeClose) ReqType(_ RefSafeTestId, _ actor.OkReply) string { return "RefSafeClose" }
+func (req *RefSafeClose) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState], _ bool) (actor.OkReply, error) {
+	a.Quit()
+	return actor.OK, nil
+}
 
 // RefGetRef 跨 Actor 引用请求：通过 ActorRef 获取另一个 Actor 的数据。
 type RefGetRef struct {
 	TargetId RefSafeTestId
+	Cleaned  *atomic.Bool
 }
 
 type RefGetRefReply struct {
@@ -406,44 +429,30 @@ type RefGetRefReply struct {
 }
 
 func (*RefGetRef) ReqType(_ RefSafeTestId, _ *RefGetRefReply) string { return "RefGetRef" }
+func (req *RefGetRef) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState], _ bool) (*RefGetRefReply, error) {
+	ref := a.Ref(req.TargetId)
+	if ref == nil {
+		return nil, nil // 目标不存在
+	}
+	defer ref.Release()
+
+	ctx := context.Background()
+	reply, err := actor.RefSafeCall(ctx, ref, &RefSafeGet{Cleaned: req.Cleaned})
+	if err != nil {
+		return nil, err
+	}
+	defer reply.Close()
+	return &RefGetRefReply{Value: reply.Value}, nil
+}
 
 func setupRefSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
-		actor.RegisterSpawn(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeSpawn, _ bool) (actor.OkReply, error) {
-			a.Open() // spawn 后保持活跃（框架不再自动激活）
-			a.SetState(RefSafeState{Counter: req.Value})
-			return actor.OK, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeGet, _ bool) (*RefSafeReply, error) {
-			return &RefSafeReply{Value: a.State().Counter, cleaned: cleaned}, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeSlowGet, _ bool) (*RefSafeReply, error) {
-			time.Sleep(200 * time.Millisecond)
-			return &RefSafeReply{Value: a.State().Counter, cleaned: cleaned}, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafePing, _ bool) (actor.OkReply, error) {
-			return actor.OK, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeClose, _ bool) (actor.OkReply, error) {
-			a.Quit()
-			return actor.OK, nil
-		})
-		// 跨 Actor 引用 handler
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefGetRef, _ bool) (*RefGetRefReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return nil, nil // 目标不存在
-			}
-			defer ref.Release()
-
-			ctx := context.Background()
-			reply, err := actor.RefSafeCall(ctx, ref, &RefSafeGet{})
-			if err != nil {
-				return nil, err
-			}
-			defer reply.Close()
-			return &RefGetRefReply{Value: reply.Value}, nil
-		})
+		actor.RegisterSpawnHandler[RefSafeTestId, RefSafeState, *RefSafeSpawn](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeGet](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeSlowGet](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafePing](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeClose](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefGetRef](b)
 	})
 }
 
@@ -458,11 +467,11 @@ func TestRefSafeCallBasic(t *testing.T) {
 	if err := actor.Post(mgr, id, &RefSafeSpawn{Value: 42}); err != nil {
 		t.Fatalf("Post Spawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// 验证 Actor 正常工作
 	ctx := context.Background()
-	reply, err := actor.Call(ctx, mgr, id, &RefSafeGet{})
+	reply, err := actor.Call(ctx, mgr, id, &RefSafeGet{Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("Call RefSafeGet failed: %v", err)
 	}
@@ -488,11 +497,11 @@ func TestRefSafeCallCrossActor(t *testing.T) {
 	if err := actor.Post(mgr, targetId, &RefSafeSpawn{Value: 99}); err != nil {
 		t.Fatalf("Post Spawn target failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// src 通过 RefGetRef 跨引用读取 target 的数据
 	ctx := context.Background()
-	reply, err := actor.Call(ctx, mgr, srcId, &RefGetRef{TargetId: targetId})
+	reply, err := actor.Call(ctx, mgr, srcId, &RefGetRef{TargetId: targetId, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("Call RefGetRef failed: %v", err)
 	}
@@ -513,40 +522,12 @@ func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
 
 	// 注册两个 handler：一个正常获取，一个慢获取（用于超时）
 	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
-		actor.RegisterSpawn(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeSpawn, _ bool) (actor.OkReply, error) {
-			a.Open() // spawn 后保持活跃（框架不再自动激活）
-			a.SetState(RefSafeState{Counter: req.Value})
-			return actor.OK, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeGet, _ bool) (*RefSafeReply, error) {
-			return &RefSafeReply{Value: a.State().Counter, cleaned: &cleaned}, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafeSlowGet, _ bool) (*RefSafeReply, error) {
-			time.Sleep(200 * time.Millisecond)
-			return &RefSafeReply{Value: a.State().Counter, cleaned: &cleaned}, nil
-		})
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefSafePing, _ bool) (actor.OkReply, error) {
-			return actor.OK, nil
-		})
+		actor.RegisterSpawnHandler[RefSafeTestId, RefSafeState, *RefSafeSpawn](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeGet](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeSlowGet](b)
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafePing](b)
 		// 通过 RefSafeCall 跨引用调用慢 handler 的包装请求
-		actor.RegisterQuery(b, func(a *actor.ActorContext[RefSafeTestId, RefSafeState], req *RefGetRef, _ bool) (*RefGetRefReply, error) {
-			ref := a.Ref(req.TargetId)
-			if ref == nil {
-				return &RefGetRefReply{}, nil
-			}
-			defer ref.Release()
-
-			// 使用极短超时的 context 触发 RefSafeCall 超时清理
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-			defer cancel()
-
-			reply, err := actor.RefSafeCall(ctx, ref, &RefSafeSlowGet{})
-			if err != nil {
-				return &RefGetRefReply{Value: -1}, nil
-			}
-			defer reply.Close()
-			return &RefGetRefReply{Value: reply.Value}, nil
-		})
+		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefGetRef](b)
 	})
 
 	targetId := RefSafeTestId{Name: "target"}
@@ -557,17 +538,17 @@ func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
 	if err := actor.Post(mgr, srcId, &RefSafeSpawn{Value: 0}); err != nil {
 		t.Fatalf("Post Spawn src failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// 触发跨引用调用，RefSafeCall 会因超时而清理 reply
 	ctx := context.Background()
-	_, err := actor.Call(ctx, mgr, srcId, &RefGetRef{TargetId: targetId})
+	_, err := actor.Call(ctx, mgr, srcId, &RefGetRef{TargetId: targetId, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("Call RefGetRef failed: %v", err)
 	}
 
 	// 等待慢 handler 完成
-	time.Sleep(300 * time.Millisecond)
+	testutil.Settle(300 * time.Millisecond)
 
 	// 超时后，reply 应被 RefSafeCall 的 safeResult 自动 Close
 	if !cleaned.Load() {
@@ -590,7 +571,7 @@ func TestRefSafeCallClosedActor(t *testing.T) {
 	if err := actor.Post(mgr, srcId, &RefSafeSpawn{Value: 0}); err != nil {
 		t.Fatalf("Post Spawn src failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// 关闭 target Actor
 	if _, err := actor.Call(context.Background(), mgr, targetId, &RefSafeClose{}); err != nil {
@@ -606,7 +587,7 @@ func TestRefSafeCallClosedActor(t *testing.T) {
 	// src 通过 RefGetRef 尝试跨引用访问已关闭的 target
 	// RefGetRef handler 内 ctx.Ref 返回 nil（target 已关闭），handler 返回 nil reply
 	ctx := context.Background()
-	reply, err := actor.Call(ctx, mgr, srcId, &RefGetRef{TargetId: targetId})
+	reply, err := actor.Call(ctx, mgr, srcId, &RefGetRef{TargetId: targetId, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("Call RefGetRef failed: %v", err)
 	}
@@ -634,10 +615,10 @@ func TestSafeCallTypeSafety(t *testing.T) {
 
 	id := SafeTestId{Name: "type_safe"}
 	actor.Post(mgr, id, &SafeTestInit{Value: 0})
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
-	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1})
+	reply, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1, Cleaned: &cleaned})
 	if err != nil {
 		t.Fatalf("SafeCall failed: %v", err)
 	}

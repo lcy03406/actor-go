@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
+	"github.com/lcy03406/actor-go/internal/testutil"
 )
 
 // ─── 测试用 Actor 类型 ───
@@ -76,20 +77,42 @@ func (DummyTransport) EncodeRep(seq uint64, repM DummyMessage, rerr string) (dat
 	return nil, nil
 }
 
+// ─── 测试脚手架 ───
+
+// newRouter 创建单节点 Router（含 manager 与 consistent-hash placement）。
+// 不传入 Node 时默认单节点 node-1；传入多个 Node 时第一个节点为 self。
+// 适用于不需要在 manager 上注册额外 handler 的测试，消除重复的
+// node + staticMembership + NewManager + NewRouter 样板。
+func newRouter(members ...Node) *Router[DummyMessage, DummyCodec, DummyTransport] {
+	if len(members) == 0 {
+		members = []Node{{ID: "node-1", Addr: "127.0.0.1:8001"}}
+	}
+	mem := newStaticMembership(members[0], members...)
+	mgr := actor.NewManager()
+	return NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+}
+
+// newRouterWithManager 同 newRouter，但额外返回内部 *actor.Manager，
+// 供需要在 manager 上注册 Spawn handler 的测试使用。
+func newRouterWithManager(members ...Node) (*actor.Manager, *Router[DummyMessage, DummyCodec, DummyTransport]) {
+	if len(members) == 0 {
+		members = []Node{{ID: "node-1", Addr: "127.0.0.1:8001"}}
+	}
+	mem := newStaticMembership(members[0], members...)
+	mgr := actor.NewManager()
+	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	return mgr, router
+}
+
 // ─── Router 本地调用测试 ───
 
 func TestRouter_LocalCall(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-
-	mgr := actor.NewManager()
+	mgr, router := newRouterWithManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			return &Pong{Msg: req.Msg + "-pong"}, nil
 		})
 	})
-
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	ctx := context.Background()
 	id := TestActorId{Name: "local-call"}
@@ -108,12 +131,9 @@ func TestRouter_LocalCall(t *testing.T) {
 }
 
 func TestRouter_LocalPost(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-
 	var received string
 	var mu sync.Mutex
-	mgr := actor.NewManager()
+	mgr, router := newRouterWithManager()
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -123,8 +143,6 @@ func TestRouter_LocalPost(t *testing.T) {
 			return &Pong{Msg: "ok"}, nil
 		})
 	})
-
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	id := TestActorId{Name: "local-post"}
 	if !router.IsLocal(string(id.ActorType()), id.String()) {
@@ -136,7 +154,7 @@ func TestRouter_LocalPost(t *testing.T) {
 		t.Fatalf("local Post failed: %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	testutil.Settle(100 * time.Millisecond)
 	mu.Lock()
 	if received != "fire-and-forget" {
 		t.Errorf("Post: want fire-and-forget, got %s", received)
@@ -145,12 +163,9 @@ func TestRouter_LocalPost(t *testing.T) {
 }
 
 func TestRouter_LocalBroadcast(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-
 	var count int32
 	var mu sync.Mutex
-	mgr := actor.NewManager()
+	mgr, router := newRouterWithManager()
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
@@ -166,12 +181,11 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 		_, _ = actor.Call(context.Background(), mgr, TestActorId{Name: "bc-" + fmt.Sprint(i)}, &Ping{Msg: "init"})
 	}
 
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	err := Broadcast[DummyMessage, DummyCodec, DummyTransport, TestActorId](router, &Ping{Msg: "broadcast"})
 	if err != nil {
 		t.Fatalf("Broadcast failed: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	testutil.Settle(100 * time.Millisecond)
 	mu.Lock()
 	if count != 3 {
 		t.Errorf("Broadcast count: want 3, got %d", count)
@@ -180,12 +194,9 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 }
 
 func TestRouter_LocalMulticast(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-
 	var count int32
 	var mu sync.Mutex
-	mgr := actor.NewManager()
+	mgr, router := newRouterWithManager()
 
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
@@ -205,7 +216,6 @@ func TestRouter_LocalMulticast(t *testing.T) {
 		_, _ = actor.Call(context.Background(), mgr, id, &Ping{Msg: "init"})
 	}
 
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, ids, &Ping{Msg: "multicast"})
 	if err != nil {
 		t.Fatalf("Multicast failed: %v", err)
@@ -216,10 +226,7 @@ func TestRouter_LocalMulticast(t *testing.T) {
 }
 
 func TestRouter_IsLocal(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	if !router.IsLocal("any", "actor") {
 		t.Error("IsLocal: expected true for single-node cluster")
@@ -229,11 +236,7 @@ func TestRouter_IsLocal(t *testing.T) {
 // ─── Router 生命周期测试 ───
 
 func TestRouter_NewRouter(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 	if router == nil {
 		t.Fatal("NewRouter: expected non-nil router")
 	}
@@ -246,10 +249,7 @@ func TestRouter_NewRouter(t *testing.T) {
 }
 
 func TestRouter_Self(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	self := router.Self()
 	if self.ID != "node-1" {
@@ -284,10 +284,7 @@ func TestRouter_Members(t *testing.T) {
 }
 
 func TestRouter_Events(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	events := router.Events()
 	if events == nil {
@@ -296,10 +293,7 @@ func TestRouter_Events(t *testing.T) {
 }
 
 func TestRouter_Close(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	if err := router.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)
@@ -312,9 +306,7 @@ func TestRouter_Place(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
-	mem := newStaticMembership(node1, node1, node2, node3)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2, node3)
 
 	n := router.Place("player", "actor-1")
 	if n.ID == "" {
@@ -343,9 +335,7 @@ func TestRouter_IsLocal_MultiNode(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
-	mem := newStaticMembership(node1, node1, node2, node3)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2, node3)
 
 	isLocal := router.IsLocal("player", "actor-x")
 	n := router.Place("player", "actor-x")
@@ -359,9 +349,7 @@ func TestRouter_IsLocal_MultiNode(t *testing.T) {
 func TestRouter_GetClient_Remote(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-	mem := newStaticMembership(node1, node1, node2)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2)
 
 	// 连接到远程节点会失败（地址不可达），但不应 panic
 	_, err := router.GetClient(node2)
@@ -376,10 +364,7 @@ func TestRouter_GetClient_Remote(t *testing.T) {
 }
 
 func TestRouter_RemoveClient_NoExist(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	router.RemoveClient("no-such-addr")
 }
@@ -389,9 +374,7 @@ func TestRouter_RemoveClient_NoExist(t *testing.T) {
 func TestRouter_Call_RemoteUnreachable(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-	mem := newStaticMembership(node1, node1, node2)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2)
 
 	ctx := context.Background()
 
@@ -416,9 +399,7 @@ func TestRouter_Call_RemoteUnreachable(t *testing.T) {
 func TestRouter_Post_RemoteUnreachable(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-	mem := newStaticMembership(node1, node1, node2)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2)
 
 	id := TestActorId{Name: "remote-post"}
 	if router.IsLocal(string(id.ActorType()), id.String()) {
@@ -434,10 +415,7 @@ func TestRouter_Post_RemoteUnreachable(t *testing.T) {
 // ─── Multicast 边界情况 ───
 
 func TestRouter_Multicast_Empty(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, []TestActorId{}, &Ping{Msg: "empty"})
 	if err != nil {
@@ -452,9 +430,7 @@ func TestRouter_Multicast_AllRemote(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
-	mem := newStaticMembership(node1, node1, node2, node3)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2, node3)
 
 	var remoteIds []TestActorId
 	for i := 0; i < 20; i++ {
@@ -481,11 +457,9 @@ func TestRouter_Multicast_AllRemote(t *testing.T) {
 func TestRouter_Multicast_Mixed(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-	mem := newStaticMembership(node1, node1, node2)
-
 	var localCount int32
 	var mu sync.Mutex
-	mgr := actor.NewManager()
+	mgr, router := newRouterWithManager(node1, node2)
 	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -502,7 +476,6 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, ids, &Ping{Msg: "mixed"})
 	if n < 0 {
 		t.Errorf("Multicast mixed: unexpected negative count %d", n)
@@ -519,9 +492,7 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 func TestClientPool_Concurrent(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
-	mem := newStaticMembership(node1, node1, node2)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter(node1, node2)
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 20)
@@ -548,10 +519,7 @@ func TestClientPool_Concurrent(t *testing.T) {
 }
 
 func TestClientPool_ConcurrentRemove(t *testing.T) {
-	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
-	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
-	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
+	router := newRouter()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {

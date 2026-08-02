@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
+	"github.com/lcy03406/actor-go/internal/testutil"
 )
 
 // ============================================================
@@ -127,7 +128,7 @@ func TestRequestHandlerSpawn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// 验证 Actor 已创建
 	ctx := context.Background()
@@ -149,7 +150,7 @@ func TestRequestHandlerQuery(t *testing.T) {
 	if err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 10}); err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
 
@@ -203,7 +204,7 @@ func TestRequestHandlerClose(t *testing.T) {
 	if err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 0}); err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// 通过 HandlerClose 关闭
 	_, err := actor.Call(context.Background(), mgr, id, &HandlerClose{})
@@ -212,15 +213,7 @@ func TestRequestHandlerClose(t *testing.T) {
 	}
 
 	// 等待关闭
-	for i := 0; i < 20; i++ {
-		time.Sleep(50 * time.Millisecond)
-		if count, _ := actor.Count[HandlerTestId](mgr); count == 0 {
-			break
-		}
-	}
-	if count, _ := actor.Count[HandlerTestId](mgr); count != 0 {
-		t.Errorf("expected 0 actors after close, got %d", count)
-	}
+	testutil.WaitStop[HandlerTestId](t, mgr, time.Second)
 }
 
 // TestRequestHandlerWithSafeCall 测试 RequestHandler 与 SafeCall 配合使用。
@@ -237,7 +230,7 @@ func TestRequestHandlerWithSafeCall(t *testing.T) {
 	if err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 10}); err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
 	reply, err := actor.SafeCall(ctx, mgr, id, &HandlerSafe{Add: 5, cleaned: &cleaned})
@@ -267,7 +260,7 @@ func TestRequestHandlerConcurrent(t *testing.T) {
 	if err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 0}); err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	const N = 50
 	results := make([]int, N)
@@ -306,7 +299,7 @@ func TestRequestHandlerTimeout(t *testing.T) {
 	if err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 0}); err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
@@ -339,7 +332,7 @@ func TestRequestHandlerVsRegisterQuery(t *testing.T) {
 	if err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 10}); err != nil {
 		t.Fatalf("Post HandlerSpawn failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	// HandlerAdd（传统 RegisterQuery 模式）
 	ctx := context.Background()
@@ -385,15 +378,7 @@ func TestRequestHandlerBroadcast(t *testing.T) {
 	}
 
 	// 所有 Actor 应已关闭
-	for i := 0; i < 20; i++ {
-		time.Sleep(50 * time.Millisecond)
-		if c, _ := actor.Count[HandlerTestId](mgr); c == 0 {
-			break
-		}
-	}
-	if c, _ := actor.Count[HandlerTestId](mgr); c != 0 {
-		t.Errorf("expected 0 actors after broadcast, got %d", c)
-	}
+	testutil.WaitStop[HandlerTestId](t, mgr, time.Second)
 }
 
 // TestRequestHandlerMulticast 测试 RequestHandler 多播。
@@ -420,15 +405,7 @@ func TestRequestHandlerMulticast(t *testing.T) {
 	}
 
 	// 后 2 个应仍存活
-	for i := 0; i < 20; i++ {
-		time.Sleep(50 * time.Millisecond)
-		if c, _ := actor.Count[HandlerTestId](mgr); c == 2 {
-			break
-		}
-	}
-	if c, _ := actor.Count[HandlerTestId](mgr); c != 2 {
-		t.Errorf("expected 2 remaining actors, got %d", c)
-	}
+	testutil.WaitCount[HandlerTestId](t, mgr, 2, time.Second)
 }
 
 // TestRequestHandlerGroupNotFound 测试未注册 Group 时 RequestHandler 调用返回错误。
@@ -485,7 +462,7 @@ func TestRequestHandlerTypeSafety(t *testing.T) {
 
 	id := HandlerTestId{Name: "type_safe"}
 	actor.Post(mgr, id, &HandlerSpawn{InitValue: 1})
-	time.Sleep(50 * time.Millisecond)
+	testutil.Settle()
 
 	ctx := context.Background()
 	reply, err := actor.Call(ctx, mgr, id, &HandlerAdd{Add: 1})

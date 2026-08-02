@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lcy03406/actor-go/actor"
+	"github.com/lcy03406/actor-go/internal/testutil"
 )
 
 // ─── 测试用类型 ───
@@ -99,11 +100,18 @@ func activatingSpawn[Q any, R any](
 	}
 }
 
+// setupManager 创建 manager 并按给定注册函数注册一组 grain handler，
+// 消除各测试中重复的 `actor.NewManager()` + `actor.Serve(...)` 包裹样板。
+func setupManager(pm *PersistenceManager, register func(b *actor.RegistryBuilder[TestGrainId, testState])) *actor.Manager {
+	mgr := actor.NewManager()
+	actor.Serve(mgr, 10, register)
+	return mgr
+}
+
 // setupTestRegistry 创建 manager 并注册一组标准的 grain handler。
 func setupTestRegistry(t *testing.T, pm *PersistenceManager) *actor.Manager {
 	t.Helper()
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	return setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
@@ -119,31 +127,13 @@ func setupTestRegistry(t *testing.T, pm *PersistenceManager) *actor.Manager {
 			return actor.OK, nil
 		}))
 	})
-	return mgr
 }
 
 // ─── 测试 ───
 
 func TestLifecycle_ActivateDeactivate(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
-			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
-		})
-		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Data.Value += req.Add
-			return actor.OK, nil
-		}))
-		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx)
-			return actor.OK, nil
-		}))
-	})
+	mgr := setupTestRegistry(t, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -193,8 +183,7 @@ func TestLifecycle_Persist(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			ctx.State().Data.Value = 999
 			if err := ctx.State().Persist(ctx); err != nil {
@@ -217,7 +206,7 @@ func TestLifecycle_Persist(t *testing.T) {
 
 	actor.CloseActor[TestGrainId](mgr, TestGrainId{Name: "persist-test"})
 	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "persist-test"})
-	time.Sleep(200 * time.Millisecond)
+	testutil.Settle(200 * time.Millisecond)
 
 	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "persist-test"}, &TestSpawnReq{})
 	if err != nil {
@@ -237,24 +226,7 @@ func TestLifecycle_Persist(t *testing.T) {
 
 func TestLifecycle_MutateAndDeactivate(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
-
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
-			return &TestSpawnReply{Activated: true}, nil
-		}))
-		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Data.Value += req.Add
-			return actor.OK, nil
-		}))
-		actor.RegisterServe(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx)
-			return actor.OK, nil
-		}))
-		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
-			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
-		})
-	})
+	mgr := setupTestRegistry(t, pm)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -555,8 +527,7 @@ func TestPersistenceManager_NilDriver(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
@@ -615,8 +586,7 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 
-	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
