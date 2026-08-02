@@ -145,6 +145,17 @@ type AttackReply struct {
     Alive       bool `json:"alive"`
 }
 
+// SafeReply — reply that requires resource cleanup
+// Implements actor.SafeReply[*SafeAttackReply] (~*R0 + Close())
+type SafeAttackReply struct {
+    RemainingHP int  `json:"remainingHP"`
+    Alive       bool `json:"alive"`
+    // internal resources like connection handles, file descriptors, etc.
+}
+func (r *SafeAttackReply) Close() {
+    // release resources (e.g. return to connection pool, close file, etc.)
+}
+
 // Requests — implement Request[A, R]
 type Login struct {
     InitHP    int `json:"initHP"`
@@ -196,6 +207,72 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 | `RegisterQuery` | no | yes | custom |
 | `RegisterServe` | yes | yes | custom |
 
+#### RequestHandler — Self-Contained Request Types
+
+As an alternative to passing handler functions separately, request types can implement
+`RequestHandler` to bundle the handler logic directly on the request struct.
+This keeps related logic together and reduces boilerplate — no need to write a
+separate closure for each registration.
+
+```go
+// RequestHandler combines Request + Handler into one type
+type Login struct {
+    InitHP    int `json:"initHP"`
+    InitLevel int `json:"initLevel"`
+}
+
+// ReqType identifies the request (same as Request interface)
+func (*Login) ReqType(_ PlayerId, _ actor.OkReply) string { return "Login" }
+
+// Handle contains the handler logic — no separate closure needed
+func (req *Login) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], spawning bool) (actor.OkReply, error) {
+    ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
+    return actor.OK, nil
+}
+
+type Attack struct {
+    Damage int `json:"damage"`
+}
+
+func (*Attack) ReqType(_ PlayerId, _ *AttackReply) string { return "Attack" }
+func (req *Attack) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], spawning bool) (*AttackReply, error) {
+    ctx.State().HP -= req.Damage
+    alive := ctx.State().HP > 0
+    return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
+}
+
+// Registration: pass only the type, no function argument
+actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+    actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
+    actor.RegisterQueryHandler[PlayerId, PlayerState, *Attack](b)
+})
+```
+
+**Handler registration variants:**
+
+| Register | Handler type | Signature |
+|----------|-------------|-----------|
+| `RegisterSpawn` / `RegisterQuery` / `RegisterServe` | `handlerFunc` | `func(ctx, req, spawning) (R, error)` — passed as argument |
+| `RegisterSpawnHandler` / `RegisterQueryHandler` / `RegisterServeHandler` | `RequestHandler` | `func(req) Handle(ctx, spawning) (R, error)` — method on request type |
+
+**Comparison:**
+
+```go
+// Traditional: handler logic in closure
+actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+    ctx.SetState(PlayerState{HP: req.InitHP})
+    return actor.OK, nil
+})
+
+// RequestHandler: handler logic on request type — one less function parameter
+actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
+```
+
+Both patterns are fully interoperable — you can mix `RegisterSpawn` and
+`RegisterSpawnHandler` within the same `RegistryBuilder`. Choose based on
+whether the handler logic feels more natural on the request struct itself
+or alongside other handlers in the registration block.
+
 ### 3. Send Messages
 
 ```go
@@ -215,6 +292,15 @@ fmt.Println(reply.RemainingHP) // 70
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 reply, err = actor.Call(ctx, mgr, playerId, &Attack{Damage: 10})
+
+// SafeCall: for replies that need explicit resource cleanup (e.g. connection handles)
+// Requires reply to implement SafeReply[R0] (~*R0 + Close())
+safeReply, err := actor.SafeCall(ctx, mgr, playerId, &Attack{Damage: 30})
+if err != nil {
+    // handle error
+}
+defer safeReply.Close() // cleanup resources when done
+// If SafeCall times out or ctx is cancelled, Close() is called automatically
 
 // Broadcast: send to all Actors in the Group
 count, _ := actor.Broadcast(mgr, &Close{})
@@ -292,6 +378,7 @@ actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req 
 | `ctx.Ref(id)` | Get a direct reference to an existing Actor (same ActorType). Returns `nil` if not found. |
 | `actor.RefPost(ref, req)` | Fire-and-forget message via `ActorRef`, bypassing Group lookup. |
 | `actor.RefCall(ctx, ref, req)` | Request-reply via `ActorRef`, bypassing Group lookup. |
+| `actor.RefSafeCall(ctx, ref, req)` | Request-reply via `ActorRef` with automatic resource cleanup on timeout/cancel. Reply must implement `SafeReply`. |
 | `ref.Release()` | Release the hold on the target Actor (idempotent). |
 | `ref.Valid()` | Check if the reference is still valid (not released, target not closed). |
 | `ref.Id()` | Return the target Actor's ID. |
@@ -309,7 +396,60 @@ Standard:   Post/Call → findHandler → findGroup → resolveActor → mailbox
 ActorRef:   RefPost/RefCall → mailbox  (no Group lookup, no resolveActor)
 ```
 
-### 6. Manager Lifecycle
+### 5. SafeCall & SafeReply — Resource-Safe Replies
+
+When a handler returns a reply that holds external resources (database connections,
+file handles, network sockets, etc.), those resources must be released regardless of
+whether the caller receives the reply. `SafeCall` guarantees this through the
+`SafeReply` interface.
+
+**How it works:**
+
+- `SafeReply[R0]` requires `~*R0` (pointer type) + `Close()` method
+- On success: caller receives the reply and is responsible for calling `Close()`
+- On timeout/cancel: the framework automatically calls `Close()` on the orphaned reply
+- `SafeCall` / `RefSafeCall` mirrors `Call` / `RefCall` but with `SafeReply` constraint
+
+```go
+// Define a SafeReply type
+type ResourceReply struct {
+    Data   []byte
+    handle *os.File  // needs cleanup
+}
+
+func (r *ResourceReply) Close() {
+    if r.handle != nil {
+        r.handle.Close()
+    }
+}
+
+// Register handler returning SafeReply
+actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *LoadData, _ bool) (*ResourceReply, error) {
+    f, _ := os.Open("data.bin")
+    data, _ := io.ReadAll(f)
+    return &ResourceReply{Data: data, handle: f}, nil
+})
+
+// Use SafeCall — Close() is guaranteed
+reply, err := actor.SafeCall(ctx, mgr, id, &LoadData{})
+if err != nil {
+    // If timeout/cancel: reply.Close() already called automatically
+    return err
+}
+defer reply.Close() // caller must close on success
+// use reply.Data...
+```
+
+| API | Constraint | Cleanup on success | Cleanup on timeout/cancel |
+|-----|-----------|-------------------|--------------------------|
+| `Call` / `RefCall` | `PtrReply` | Caller N/A | Reply discarded (no Close) |
+| `SafeCall` / `RefSafeCall` | `SafeReply` | Caller calls `Close()` | Framework calls `Close()` automatically |
+
+> **Type safety**: `SafeCall` only accepts requests whose reply implements `SafeReply`.
+> Attempting `SafeCall` with a plain `PtrReply` type results in a compile error:
+> `*AttackReply does not implement SafeReply[*AttackReply] (missing Close method)`
+
+### 7. Manager Lifecycle
 
 ```go
 mgr := actor.NewManager()
@@ -527,6 +667,8 @@ placement across multiple nodes:
 | Context timeout | `Call(ctx, ...)` supports timeout and cancellation |
 | Cancellable Timer | `ctx.Timer()` returns timer ID, `ctx.StopTimer(id)` cancels |
 | ActorRef | Direct Actor-to-Actor references bypass Group lookup; ~10% faster Call |
+| SafeCall / SafeReply | Guaranteed resource cleanup: auto-Close on timeout/cancel, manual Close on success |
+| RequestHandler | Handler logic bundled on request type via `Handle()` method; reduces boilerplate |
 | Explicit Manager | `NewManager()` creates independent instances, no global state |
 | Package name alias | Use `import act "github.com/lcy03406/actor-go/actor"` to avoid conflicts |
 | Codec interface | Easy to swap serialization; supports JSON, protobuf, etc. |

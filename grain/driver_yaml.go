@@ -31,13 +31,18 @@ func (d *YamlDriver) Load(_ context.Context, actorType string, id string, owner 
 	}
 	defer func() { _ = f.Close() }()
 
+	// 先用 yaml.Node 接收 data 字段，避免 any 解码时忽略已有类型而创建 map[string]interface{}
 	type fileDoc struct {
-		Generation int64  `yaml:"generation"`
-		Data       any    `yaml:"data"`
+		Generation int64     `yaml:"generation"`
+		Data       yaml.Node `yaml:"data"`
 	}
 	var doc fileDoc
-	doc.Data = dst
 	if err := yaml.NewDecoder(f).Decode(&doc); err != nil {
+		return nil, err
+	}
+
+	// 将 data 节点解码到目标类型
+	if err := doc.Data.Decode(dst); err != nil {
 		return nil, err
 	}
 
@@ -75,15 +80,16 @@ func (d *YamlDriver) ForceRelease(_ context.Context, actorType string, id string
 		return 0, err
 	}
 
+	// 用 yaml.Node 保持原始 YAML 结构，避免 any 解码丢失类型信息
 	type fileDoc struct {
-		Generation int64 `yaml:"generation"`
-		Data       any   `yaml:"data"`
+		Generation int64     `yaml:"generation"`
+		Data       yaml.Node `yaml:"data"`
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 1, d.writeForceReleaseYaml(path, 1, nil)
+			return 1, d.writeForceReleaseYaml(path, 1, yaml.Node{})
 		}
 		return 0, err
 	}
@@ -99,10 +105,10 @@ func (d *YamlDriver) ForceRelease(_ context.Context, actorType string, id string
 	return newGen, d.writeForceReleaseYaml(path, newGen, doc.Data)
 }
 
-func (d *YamlDriver) writeForceReleaseYaml(path string, gen int64, data any) error {
+func (d *YamlDriver) writeForceReleaseYaml(path string, gen int64, data yaml.Node) error {
 	type doc struct {
-		Generation int64 `yaml:"generation"`
-		Data       any   `yaml:"data"`
+		Generation int64     `yaml:"generation"`
+		Data       yaml.Node `yaml:"data"`
 	}
 	f, err := os.Create(path)
 	if err != nil {
