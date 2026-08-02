@@ -114,6 +114,12 @@ func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership
 	if err := server.Start(); err != nil {
 		return nil, nil, fmt.Errorf("启动 RPC Server 失败: %w", err)
 	}
+	actualAddr := server.Addr()
+	self.Addr = actualAddr
+	mem.updateSelf(cfg.NodeID, self)
+
+	log.Printf("节点已启动: %s (%s) 监听 %s, 成员 %d",
+		self.ID, cfg.NodeType, actualAddr, len(members))
 	go func() {
 		<-ctx.Done()
 		server.Shutdown(context.Background())
@@ -138,8 +144,6 @@ func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership
 	}
 	go coord.Run(ctx, mem.Events())
 
-	log.Printf("节点已启动: %s (%s) 监听 %s, 成员 %d",
-		cfg.NodeID, cfg.NodeType, cfg.Addr, len(members))
 	return router, mem, nil
 }
 

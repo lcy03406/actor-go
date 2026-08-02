@@ -47,6 +47,20 @@ func (d *DynamicMembership) Join(seeds []string) error { return nil }
 func (d *DynamicMembership) Leave() error              { return nil }
 func (d *DynamicMembership) Close() error              { return nil }
 
+// updateSelf 更新本地节点信息（用于端口 0 场景，Server 绑定后更新实际地址）。
+// oldID 用于在 members 中定位旧节点记录。
+func (d *DynamicMembership) updateSelf(oldID string, self cluster.Node) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.self = self
+	for i, m := range d.members {
+		if m.ID == oldID {
+			d.members[i] = self
+			return
+		}
+	}
+}
+
 // AddNode 模拟节点加入集群，触发 MemberJoined 事件。
 func (d *DynamicMembership) AddNode(n cluster.Node) {
 	d.mu.Lock()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -89,16 +90,8 @@ func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 		})
 	})
 
-	// 获取随机端口
-	listener, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatalf("failed to listen: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
 	server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-		fmt.Sprintf("localhost:%d", port),
+		"localhost:0",
 		mgr,
 		func(b *testRegBuilder) {
 			rpc.RegisterRequest(b, &TestRpcLogin{})
@@ -113,7 +106,9 @@ func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 	// 等待服务端就绪
 	time.Sleep(300 * time.Millisecond)
 
-	return server, mgr, port
+	_, port, _ := net.SplitHostPort(server.Addr())
+	p, _ := strconv.Atoi(port)
+	return server, mgr, p
 }
 
 // setupRPCClient 创建并连接 RPC 客户端。
@@ -212,12 +207,8 @@ func TestRPCCallSpawn(t *testing.T) {
 		})
 	})
 
-	listener, _ := net.Listen("tcp", "localhost:0")
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
 	server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-		fmt.Sprintf("localhost:%d", port),
+		"localhost:0",
 		mgr,
 		func(b *testRegBuilder) {
 			rpc.RegisterRequest(b, &TestRpcLoginWithReply{})
@@ -227,7 +218,9 @@ func TestRPCCallSpawn(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	time.Sleep(300 * time.Millisecond)
 
-	client := setupRPCClient(t, port)
+	_, port, _ := net.SplitHostPort(server.Addr())
+	p, _ := strconv.Atoi(port)
+	client := setupRPCClient(t, p)
 	defer client.Close()
 
 	// 首次 Call 触发 spawn + 返回回复
@@ -278,12 +271,8 @@ func TestRPCCallTimeoutExceeded(t *testing.T) {
 		})
 	})
 
-	listener, _ := net.Listen("tcp", "localhost:0")
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
 	server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-		fmt.Sprintf("localhost:%d", port),
+		"localhost:0",
 		mgr,
 		func(b *testRegBuilder) {
 			rpc.RegisterRequest(b, &TestRpcLogin{})
@@ -294,7 +283,9 @@ func TestRPCCallTimeoutExceeded(t *testing.T) {
 	defer server.Shutdown(context.Background())
 	time.Sleep(300 * time.Millisecond)
 
-	client := setupRPCClient(t, port)
+	_, port, _ := net.SplitHostPort(server.Addr())
+	p, _ := strconv.Atoi(port)
+	client := setupRPCClient(t, p)
 	defer client.Close()
 
 	id := TestRpcId{ServerId: 1, OpenId: "timeout_exceed"}

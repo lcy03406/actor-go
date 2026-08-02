@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -44,17 +45,25 @@ func NewServer[M Message, C Codec[M], T Transport[M]](addr string, mgr *actor.Ma
 
 // Start 启动 RPC 服务（非阻塞）。
 func (s *Server[M, C, T]) Start() error {
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	s.addr = ln.Addr().String()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rpc", s.handleRPC)
-	s.server = &http.Server{Addr: s.addr, Handler: mux}
+	s.server = &http.Server{Handler: mux}
 	s.logger.Info("RPC server starting", "addr", s.addr)
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := s.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.logger.Error("RPC server error", "error", err)
 		}
 	}()
 	return nil
 }
+
+// Addr 返回 Server 实际监听的地址。
+func (s *Server[M, C, T]) Addr() string { return s.addr }
 
 // Run 启动 RPC 服务（阻塞）。
 func (s *Server[M, C, T]) Run() error {
