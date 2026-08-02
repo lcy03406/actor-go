@@ -47,3 +47,31 @@ func RegisterServe[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0
 ) {
 	register(b, true, true, fn)
 }
+
+// RegisterSpawnHandler 注册 spawn 处理器（首次消息创建 Actor，不等待回复）。
+func RegisterSpawnHandler[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
+	b *RegistryBuilder[A, S],
+) {
+	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		return req.Handle(actor, spawning)
+	}
+	register(b, true, false, fn)
+}
+
+func RegisterQueryHandler[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
+	b *RegistryBuilder[A, S],
+) {
+	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		return req.Handle(actor, spawning)
+	}
+	register(b, false, true, fn)
+}
+
+func RegisterServeHandler[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
+	b *RegistryBuilder[A, S],
+) {
+	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		return req.Handle(actor, spawning)
+	}
+	register(b, true, true, fn)
+}

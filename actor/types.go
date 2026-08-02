@@ -33,18 +33,20 @@ type SafeReply[R0 any] interface {
 	Close()
 }
 
-type PtrRequest[Q0 any] interface {
-	~*Q0
-}
-
 // Request 是所有请求类型必须实现的接口。
 // A 限定请求所属的 ActorId 类型，R 限定请求的回复类型。
 // ReqType 方法的参数类型(A, *R)确保编译器能检查 Q 与 A、R 的匹配关系。
 // 例如 func (*TestAdd) ReqType(_ TestActorId, _ *TestAddReply) string 只能匹配
 // Request[TestActorId, TestAddReply]，无法匹配其他 A/R 组合。
 type Request[A ActorId, R PtrReply[R0], Q0 any, R0 any] interface {
-	PtrRequest[Q0]
+	~*Q0
 	ReqType(A, R) string
+}
+
+type RequestHandler[A ActorId, S anyState, R PtrReply[R0], Q0 any, R0 any] interface {
+	~*Q0
+	ReqType(A, R) string
+	Handle(actor *ActorContext[A, S], spawning bool) (R, error)
 }
 
 func reqTypeOf[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any]() string {
