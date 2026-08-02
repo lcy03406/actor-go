@@ -24,16 +24,22 @@ type Server[M Message, C Codec[M], T Transport[M]] struct {
 	logger   *slog.Logger
 }
 
-// NewServer 创建一个新的 RPC Server。
-func NewServer[M Message, C Codec[M], T Transport[M]](addr string, mgr *actor.Manager, reg func(*RegistryBuilder[M, C])) *Server[M, C, T] {
-	b := &RegistryBuilder[M, C]{entryMap: make(map[registryKey]entry[M, C])}
-	reg(b)
+// NewServerWith 创建一个新的 RPC Server。
+// 调用后builder不应再修改。
+func NewServerWith[M Message, C Codec[M], T Transport[M]](addr string, mgr *actor.Manager, builder *RegistryBuilder[M, C]) *Server[M, C, T] {
 	return &Server[M, C, T]{
 		mgr:      mgr,
 		addr:     addr,
-		entryMap: b.entryMap,
+		entryMap: builder.entryMap,
 		logger:   slog.With("component", "RpcServer"),
 	}
+}
+
+// NewServer 创建一个新的 RPC Server。
+func NewServer[M Message, C Codec[M], T Transport[M]](addr string, mgr *actor.Manager, reg func(*RegistryBuilder[M, C])) *Server[M, C, T] {
+	b := NewRegistryBuilder[M, C]()
+	reg(b)
+	return NewServerWith[M, C, T](addr, mgr, b)
 }
 
 // Start 启动 RPC 服务（非阻塞）。

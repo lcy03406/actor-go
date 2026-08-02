@@ -20,7 +20,7 @@ type actorRuntime[A ActorId, S anyState] struct {
 	holder  atomic.Int32 //引用计数，初始1，为0时关闭mailbox
 }
 
-func newActor[A ActorId, S anyState](id A, g *group[A, S], capacity int) *actorRuntime[A, S] {
+func newActor[A ActorId, S anyState](id A, g *group[A, S], bufMails int) *actorRuntime[A, S] {
 	ctx, cancel := context.WithCancel(g.ctx)
 	return &actorRuntime[A, S]{
 		ctx:     ctx,
@@ -28,7 +28,7 @@ func newActor[A ActorId, S anyState](id A, g *group[A, S], capacity int) *actorR
 		id:      id,
 		g:       g,
 		logger:  slog.With("actor", id.String()),
-		mailbox: make(chan invokable[A, S], capacity),
+		mailbox: make(chan invokable[A, S], bufMails),
 		doneCh:  make(chan struct{}),
 	}
 }

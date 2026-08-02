@@ -5,8 +5,8 @@ type RegistryBuilder[A ActorId, S anyState] struct {
 	handlers map[string]handler[A]
 }
 
-// newRegistryBuilder 创建一个新的 RegistryBuilder。
-func newRegistryBuilder[A ActorId, S anyState]() *RegistryBuilder[A, S] {
+// NewRegistryBuilder 创建一个新的 RegistryBuilder。
+func NewRegistryBuilder[A ActorId, S anyState]() *RegistryBuilder[A, S] {
 	return &RegistryBuilder[A, S]{
 		handlers: make(map[string]handler[A]),
 	}
@@ -78,30 +78,33 @@ func RegisterServeHandler[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R
 
 func RegisterSpawnHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
-	_ Q,
-) {
+	typedNil Q,
+) Q {
 	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
 		return req.Handle(actor, spawning)
 	}
 	register(b, true, false, fn)
+	return typedNil
 }
 
 func RegisterQueryHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
-	_ Q,
-) {
+	typedNil Q,
+) Q {
 	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
 		return req.Handle(actor, spawning)
 	}
 	register(b, false, true, fn)
+	return typedNil
 }
 
 func RegisterServeHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
-	_ Q,
-) {
+	typedNil Q,
+) Q {
 	fn := func(actor *ActorContext[A, S], req Q, spawning bool) (R, error) {
 		return req.Handle(actor, spawning)
 	}
 	register(b, true, true, fn)
+	return typedNil
 }

@@ -42,7 +42,12 @@ type State[A actor.ActorId, D any, S any, T Snapshotter[D, S]] struct {
 }
 
 // Deactivate 保存 Data、释放租约、退出 Grain。
+// 必须在 Grain 模式下调用（State.pm 不为 nil），否则 panic。
 func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S, T]]) {
+	if s.pm == nil {
+		panic("grain: Deactivate called without PersistenceManager. " +
+			"Use grain.WrapSpawnHandler2 or pass pm to RegisterHandlers.")
+	}
 	id := ctx.Id()
 	actorType := string(id.ActorType())
 
@@ -68,7 +73,12 @@ func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S,
 
 // Persist 主动保存 Data 并续租，不退出 Grain。
 // 每次调用都会续租，重置租约 TTL。
+// 必须在 Grain 模式下调用（State.pm 不为 nil），否则 panic。
 func (s *State[A, D, S, T]) Persist(ctx *actor.ActorContext[A, State[A, D, S, T]]) error {
+	if s.pm == nil {
+		panic("grain: Persist called without PersistenceManager. " +
+			"Use grain.WrapSpawnHandler2 or pass pm to RegisterHandlers.")
+	}
 	var gen int64
 	if s.lease != nil {
 		gen = s.lease.Generation

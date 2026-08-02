@@ -34,3 +34,5 @@ coverage.html
 
 # Temp
 tmp/
+
+cmd/engineering_example/data/
