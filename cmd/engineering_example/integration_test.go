@@ -13,7 +13,6 @@ import (
 
 	"github.com/lcy03406/actor-go/cluster"
 
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/chat"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/attr"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/inventory"
@@ -86,22 +85,31 @@ func TestPlayerFullLifecycle(t *testing.T) {
 		t.Errorf("Level 期望=3, 实际=%d", status.Level)
 	}
 
-	// 攻击
-	atk, err := cluster.Call(ctx, n.router, p1, &player.Attack{Damage: 30})
-	if err != nil {
-		t.Fatalf("攻击失败: %v", err)
-	}
-	if !atk.Alive {
-		t.Error("玩家应该存活")
-	}
-
-	// 治疗
-	heal, err := cluster.Call(ctx, n.router, p1, &player.Heal{Amount: 20})
+	// 治疗受 MaxHP 上限约束：初始即满血(200)，治疗应保持 200 且不溢出。
+	// （HP 上限机制把 Heal 与 MaxHP 模块结合，避免无限回血。）
+	heal, err := cluster.Call(ctx, n.router, p1, &player.ControlHeal{Amount: 20})
 	if err != nil {
 		t.Fatalf("治疗失败: %v", err)
 	}
-	if heal.NewHP != atk.RemainingHP+20 {
-		t.Errorf("治疗后 HP 期望=%d, 实际=%d", atk.RemainingHP+20, heal.NewHP)
+	if heal.NewHP != 200 {
+		t.Errorf("满血治疗后 HP 期望=200, 实际=%d", heal.NewHP)
+	}
+	if heal.Healed != 0 {
+		t.Errorf("满血治疗时 Healed 期望=0, 实际=%d", heal.Healed)
+	}
+
+	// 升级提升 MaxHP 上限：加足量经验触发升级（attr.AddExp 在升级时拉高 MaxHP 并回满血）。
+	// 之后在房间内受击掉血即可用 Heal 消耗金币续航（金币来自战斗/AddGold）。
+	if _, err := cluster.Call(ctx, n.router, p1, &attr.AddExp{Amount: 300}); err != nil {
+		t.Fatalf("加经验失败: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	status2, err := cluster.Call(ctx, n.router, p1, &player.PlayerStatusReq{})
+	if err != nil {
+		t.Fatalf("查询状态失败: %v", err)
+	}
+	if status2.MaxHP <= 200 {
+		t.Errorf("升级后 MaxHP 应提升 (>200), 实际=%d", status2.MaxHP)
 	}
 
 	// 加金币
@@ -227,7 +235,7 @@ func TestSkillModule(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	cluster.Call(ctx, n.router, p1, &player.AddGold{Amount: 500})
 
-	learn, err := cluster.Call(ctx, n.router, p1, &skill.LearnSkill{
+	learn, err := cluster.Call(ctx, n.router, p1, &skill.ControlLearn{
 		ID: 101, Name: "火球术", Cost: 50,
 	})
 	if err != nil {
@@ -245,7 +253,7 @@ func TestSkillModule(t *testing.T) {
 		t.Errorf("技能数 期望=1, 实际=%d", len(list.Skills))
 	}
 
-	cast, err := cluster.Call(ctx, n.router, p1, &skill.CastSkill{
+	cast, err := cluster.Call(ctx, n.router, p1, &skill.ControlCast{
 		ID: 101, Target: "goblin", TargetPos: logic.Point{X: 3, Y: 0},
 	})
 	if err != nil {
@@ -258,7 +266,7 @@ func TestSkillModule(t *testing.T) {
 		t.Error("伤害应该大于 0")
 	}
 
-	cast2, err := cluster.Call(ctx, n.router, p1, &skill.CastSkill{
+	cast2, err := cluster.Call(ctx, n.router, p1, &skill.ControlCast{
 		ID: 101, Target: "goblin", TargetPos: logic.Point{X: 1, Y: 0},
 	})
 	if err != nil {
@@ -268,7 +276,7 @@ func TestSkillModule(t *testing.T) {
 		t.Error("冷却中应该释放失败")
 	}
 
-	cast3, err := cluster.Call(ctx, n.router, p1, &skill.CastSkill{
+	cast3, err := cluster.Call(ctx, n.router, p1, &skill.ControlCast{
 		ID: 101, Target: "dragon", TargetPos: logic.Point{X: 10, Y: 0},
 	})
 	if err != nil {
@@ -292,7 +300,7 @@ func TestRoomActor(t *testing.T) {
 	}
 	time.Sleep(30 * time.Millisecond)
 
-	join, err := cluster.Call(ctx, n.router, r1, &room.JoinRoom{PlayerId: "alice"})
+	join, err := cluster.Call(ctx, n.router, r1, &room.JoinRoom{Player: pid("alice")})
 	if err != nil {
 		t.Fatalf("加入房间失败: %v", err)
 	}
@@ -310,18 +318,7 @@ func TestRoomActor(t *testing.T) {
 }
 
 func TestChatActor(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	ch := chat.ChatId{Channel: "world"}
-	reply, err := cluster.Call(ctx, n.router, ch, &chat.SendMessage{Text: "hello"})
-	if err != nil {
-		t.Fatalf("发送消息失败: %v", err)
-	}
-	if reply.Echo != "hello" {
-		t.Errorf("Echo 期望=hello, 实际=%s", reply.Echo)
-	}
+	t.Skip("Chat Actor 已移除，聊天功能整合进 Room")
 }
 
 // ─── 多玩家并发 ───
@@ -341,10 +338,6 @@ func TestMultiPlayerConcurrent(t *testing.T) {
 	for _, name := range players {
 		go func(name string) {
 			p := pid(name)
-			if _, err := cluster.Call(ctx, n.router, p, &player.Attack{Damage: 10}); err != nil {
-				errCh <- err
-				return
-			}
 			if _, err := cluster.Call(ctx, n.router, p, &attr.AddExp{Amount: 150}); err != nil {
 				errCh <- err
 				return
@@ -363,9 +356,6 @@ func TestMultiPlayerConcurrent(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s 查询失败: %v", name, err)
 			continue
-		}
-		if status.HP >= 100 {
-			t.Errorf("%s 攻击后 HP 应该减少, 实际=%d", name, status.HP)
 		}
 		if status.Level < 2 {
 			t.Errorf("%s 150 经验应该至少 Lv2, 实际=%d", name, status.Level)
@@ -395,7 +385,7 @@ func TestPlayerCrossActorRoom(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 3. Player 通过 PlayerJoinRoom 请求加入 Room（Player handler 内 actor.Post → Room）
-	joinReply, err := cluster.Call(ctx, n.router, p1, &player.PlayerJoinRoom{RoomId: 200})
+	joinReply, err := cluster.Call(ctx, n.router, p1, &player.ControlJoinRoom{RoomId: 200})
 	if err != nil {
 		t.Fatalf("Player 加入房间失败: %v", err)
 	}
@@ -414,32 +404,117 @@ func TestPlayerCrossActorRoom(t *testing.T) {
 	}
 }
 
-func TestPlayerCrossActorChat(t *testing.T) {
+func TestPlayerCrossActorRoomChatAndBattle(t *testing.T) {
 	n := startTestNode(t)
 	defer n.Close()
 	ctx := context.Background()
 
-	// 1. 创建 Player
-	p1 := pid("cross_chat_player")
-	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1}); err != nil {
-		t.Fatalf("创建玩家失败: %v", err)
+	// 1. 创建两名玩家并加入同一房间
+	attacker := pid("cross_chat_attacker")
+	target := pid("cross_chat_target")
+	for _, p := range []types.PlayerId{attacker, target} {
+		if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p, &player.Login{InitHP: 1000, InitLevel: 5}); err != nil {
+			t.Fatalf("创建玩家失败: %v", err)
+		}
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 2. Player 通过 PlayerSendChat 发送聊天消息（Player handler 内 actor.Call → Chat）
-	chatReply, err := cluster.Call(ctx, n.router, p1, &player.PlayerSendChat{
-		Channel: "world",
-		Text:    "Hello from Player!",
-	})
+	r1 := room.RoomId{RoomId: 300}
+	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10}); err != nil {
+		t.Fatalf("创建房间失败: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	for _, p := range []types.PlayerId{attacker, target} {
+		joinReply, err := cluster.Call(ctx, n.router, p, &player.ControlJoinRoom{RoomId: 300})
+		if err != nil {
+			t.Fatalf("%s 加入房间失败: %v", p, err)
+		}
+		if !joinReply.Success {
+			t.Fatalf("%s 加入房间应成功: %s", p, joinReply.Reason)
+		}
+	}
+
+	// 2. 房间内聊天：Player → Room → 同房间广播
+	chatReply, err := cluster.Call(ctx, n.router, attacker, &player.PlayerRoomChat{Content: "Hello room!"})
 	if err != nil {
-		t.Fatalf("Player 发送聊天失败: %v", err)
+		t.Fatalf("Player 房间聊天失败: %v", err)
 	}
 	if !chatReply.Success {
-		t.Errorf("Player 发送聊天应成功: %s", chatReply.Reason)
+		t.Errorf("Player 房间聊天应成功: %s", chatReply.Reason)
 	}
-	expectedEcho := "[Player(1,cross_chat_player)]: Hello from Player!"
-	if chatReply.Echo != expectedEcho {
-		t.Errorf("Echo 期望='%s', 实际='%s'", expectedEcho, chatReply.Echo)
+	time.Sleep(30 * time.Millisecond)
+	roomInfo, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
+	if err != nil {
+		t.Fatalf("查询房间失败: %v", err)
+	}
+	if len(roomInfo.ChatLog) != 1 {
+		t.Errorf("聊天记录数 期望=1, 实际=%d", len(roomInfo.ChatLog))
+	} else if roomInfo.ChatLog[0].Content != "Hello room!" {
+		t.Errorf("聊天内容 期望='Hello room!', 实际='%s'", roomInfo.ChatLog[0].Content)
+	}
+
+	// 3. 房间内战斗：Player → Player(post) → 被攻击方校验同处一室后扣血 → Room 广播记录
+	battleReply, err := cluster.Call(ctx, n.router, attacker, &player.ControlAttack{TargetOpenId: "cross_chat_target"})
+	if err != nil {
+		t.Fatalf("Player 房间战斗失败: %v", err)
+	}
+	if !battleReply.Success {
+		t.Fatalf("Player 房间战斗应成功: %s", battleReply.Reason)
+	}
+	time.Sleep(50 * time.Millisecond)
+	roomInfo2, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
+	if err != nil {
+		t.Fatalf("查询房间失败: %v", err)
+	}
+	if len(roomInfo2.BattleLog) != 1 {
+		t.Errorf("战斗记录数 期望=1, 实际=%d", len(roomInfo2.BattleLog))
+	}
+
+	// 4. 验证被攻击者血量下降
+	targetStatus, err := cluster.Call(ctx, n.router, target, &player.PlayerStatusReq{})
+	if err != nil {
+		t.Fatalf("查询被攻击者状态失败: %v", err)
+	}
+	if targetStatus.HP >= 1000 {
+		t.Errorf("被攻击者 HP 应下降, 实际=%d", targetStatus.HP)
+	}
+
+	// 6. 攻击方应在收到 PlayerCombatResult 回传后获得金币/经验（异步结算）
+	time.Sleep(50 * time.Millisecond)
+	attackerStatus, err := cluster.Call(ctx, n.router, attacker, &player.PlayerStatusReq{})
+	if err != nil {
+		t.Fatalf("查询攻击方状态失败: %v", err)
+	}
+	if attackerStatus.Gold <= 100 {
+		t.Errorf("攻击方战斗后应获得金币 (>100), 实际=%d", attackerStatus.Gold)
+	}
+	if attackerStatus.Attr.Exp <= 0 {
+		t.Errorf("攻击方战斗后应获得经验 (>0), 实际=%d", attackerStatus.Attr.Exp)
+	}
+
+	// 5. 离开房间：Player → Room，Room 移除成员并广播
+	leaveReply, err := cluster.Call(ctx, n.router, target, &player.ControlLeaveRoom{})
+	if err != nil {
+		t.Fatalf("Player 离开房间失败: %v", err)
+	}
+	if !leaveReply.Success {
+		t.Fatalf("Player 离开房间应成功: %s", leaveReply.Reason)
+	}
+	time.Sleep(50 * time.Millisecond)
+	roomInfo3, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
+	if err != nil {
+		t.Fatalf("查询房间失败: %v", err)
+	}
+	if len(roomInfo3.Players) != 1 {
+		t.Errorf("离开后房间人数 期望=1, 实际=%d", len(roomInfo3.Players))
+	}
+	targetLeftStatus, err := cluster.Call(ctx, n.router, target, &player.PlayerStatusReq{})
+	if err != nil {
+		t.Fatalf("查询被攻击者状态失败: %v", err)
+	}
+	if targetLeftStatus.CurrentRoom != 0 {
+		t.Errorf("离开后 CurrentRoom 应为 0, 实际=%d", targetLeftStatus.CurrentRoom)
 	}
 }
 
@@ -470,12 +545,21 @@ func BenchmarkPlayerAttack(b *testing.B) {
 	defer n.Close()
 	ctx := context.Background()
 
-	p1 := pid("bench")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100000, InitLevel: 1})
+	p1 := pid("bench_atk")
+	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100000, InitLevel: 5})
+	p2 := pid("bench_def")
+	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p2, &player.Login{InitHP: 100000, InitLevel: 5})
+	r1 := room.RoomId{RoomId: 999}
+	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10})
 	time.Sleep(50 * time.Millisecond)
+	for _, p := range []types.PlayerId{p1, p2} {
+		if _, err := cluster.Call(ctx, n.router, p, &player.ControlJoinRoom{RoomId: 999}); err != nil {
+			b.Fatalf("加入房间失败: %v", err)
+		}
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cluster.Call(ctx, n.router, p1, &player.Attack{Damage: 1})
+		cluster.Call(ctx, n.router, p1, &player.ControlAttack{TargetOpenId: "bench_def"})
 	}
 }

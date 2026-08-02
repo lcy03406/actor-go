@@ -14,7 +14,6 @@ import (
 
 	"github.com/lcy03406/actor-go/cluster"
 
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/chat"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/attr"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/inventory"
@@ -79,11 +78,11 @@ func Run(ctx context.Context, router *setup.Router, mem *setup.DynamicMembership
 		case "roominfo":
 			cmdRoomInfo(ctx, router, args)
 		case "chat":
-			cmdChat(ctx, router, args)
+			cmdRoomChat(ctx, router, args)
 		case "pjoin":
 			cmdPlayerJoinRoom(ctx, router, args)
-		case "psend":
-			cmdPlayerSendChat(ctx, router, args)
+		case "leave":
+			cmdLeaveRoom(ctx, router, args)
 		case "info":
 			printClusterInfo(router)
 		case "nodes":
@@ -121,16 +120,21 @@ func cmdLogin(router *setup.Router, args []string) {
 
 func cmdAttack(ctx context.Context, router *setup.Router, args []string) {
 	if len(args) < 2 {
-		fmt.Println("用法: attack <id> <damage>")
+		fmt.Println("用法: attack <attackerId> <targetId>")
+		fmt.Println("  演示 Player → Player 跨 Actor 通信（攻击方 post 被攻击方，被攻击方校验同处一室后扣血并广播）")
+		fmt.Println("  攻击方与目标必须已 pjoin 进入同一个房间")
 		return
 	}
-	dmg, _ := strconv.Atoi(args[1])
 	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
-	reply, err := cluster.Call(ctx, router, id, &player.Attack{Damage: dmg})
+	reply, err := cluster.Call(ctx, router, id, &player.ControlAttack{TargetOpenId: args[1]})
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
+	} else if !reply.Success {
+		fmt.Printf("✗ %s 攻击失败: %s\n", args[0], reply.Reason)
 	} else {
-		fmt.Printf("✓ %s 受到 %d 伤害, HP=%d 存活=%v\n", args[0], dmg, reply.RemainingHP, reply.Alive)
+		fmt.Printf("✓ %s 已向 %s 发出攻击请求\n", args[0], args[1])
+		fmt.Println("  战斗结果将通过 PlayerCombatResult 回传结算（金币/经验/升级）")
+		fmt.Println("  提示: 用 roominfo 查看战斗记录，或用 status 查看自身成长")
 	}
 }
 
@@ -141,11 +145,15 @@ func cmdHeal(ctx context.Context, router *setup.Router, args []string) {
 	}
 	amt, _ := strconv.Atoi(args[1])
 	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
-	reply, err := cluster.Call(ctx, router, id, &player.Heal{Amount: amt})
+	reply, err := cluster.Call(ctx, router, id, &player.ControlHeal{Amount: amt})
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
 	} else {
-		fmt.Printf("✓ %s 治疗 %d, HP=%d\n", args[0], amt, reply.NewHP)
+		if reply.Healed > 0 {
+			fmt.Printf("✓ %s 治疗 +%d HP (HP=%d, 消耗 %d 金币)\n", args[0], reply.Healed, reply.NewHP, reply.GoldSpent)
+		} else {
+			fmt.Printf("✓ %s 未治疗 (HP=%d): %s\n", args[0], reply.NewHP, reply.Reason)
+		}
 	}
 }
 
@@ -176,7 +184,7 @@ func cmdPlayerStatus(ctx context.Context, router *setup.Router, args []string) {
 		return
 	}
 	fmt.Printf("══════ %s 状态 ══════\n", args[0])
-	fmt.Printf("  HP=%d  Level=%d  Gold=%d\n", reply.HP, reply.Level, reply.Gold)
+	fmt.Printf("  HP=%d/%d  Level=%d  Gold=%d  当前房间=%d\n", reply.HP, reply.MaxHP, reply.Level, reply.Gold, reply.CurrentRoom)
 	fmt.Printf("  [属性] Exp=%d  Atk=%d  Def=%d  Speed=%d\n",
 		reply.Attr.Exp, reply.Attr.Atk, reply.Attr.Def, reply.Attr.Speed)
 	fmt.Printf("  [背包] 容量=%d  道具数=%d\n", reply.Inventory.Capacity, len(reply.Inventory.Items))
@@ -324,7 +332,7 @@ func cmdLearnSkill(ctx context.Context, router *setup.Router, args []string) {
 	skID, _ := strconv.Atoi(args[1])
 	cost, _ := strconv.Atoi(args[3])
 	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
-	reply, err := cluster.Call(ctx, router, id, &skill.LearnSkill{ID: skID, Name: args[2], Cost: cost})
+	reply, err := cluster.Call(ctx, router, id, &skill.ControlLearn{ID: skID, Name: args[2], Cost: cost})
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
 	} else if !reply.Learned {
@@ -346,7 +354,7 @@ func cmdCastSkill(ctx context.Context, router *setup.Router, args []string) {
 		ty, _ = strconv.Atoi(args[4])
 	}
 	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
-	reply, err := cluster.Call(ctx, router, id, &skill.CastSkill{
+	reply, err := cluster.Call(ctx, router, id, &skill.ControlCast{
 		ID: skID, Target: args[2], TargetPos: logic.Point{X: tx, Y: ty},
 	})
 	if err != nil {
@@ -360,6 +368,7 @@ func cmdCastSkill(ctx context.Context, router *setup.Router, args []string) {
 		}
 		fmt.Printf("✓ %s 释放 %s → %s 造成 %d 伤害%s\n",
 			args[0], reply.SkillName, args[2], reply.Damage, critInfo)
+		fmt.Println("  提示: 技能伤害通过 combat.TakeDamage 打到同房间目标，与 attack 共用受击链路")
 	}
 }
 
@@ -408,11 +417,14 @@ func cmdJoinRoom(ctx context.Context, router *setup.Router, args []string) {
 	}
 	rid, _ := strconv.Atoi(args[0])
 	id := room.RoomId{RoomId: rid}
-	reply, err := cluster.Call(ctx, router, id, &room.JoinRoom{PlayerId: args[1]})
+	reply, err := cluster.Call(ctx, router, id, &room.JoinRoom{Player: types.PlayerId{ServerId: 1, OpenId: args[1]}})
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
 	} else {
 		fmt.Printf("✓ %s 加入 Room %d, 当前人数=%d\n", args[1], rid, reply.CurrentCount)
+		for _, p := range reply.Players {
+			fmt.Printf("    成员: %s\n", p)
+		}
 	}
 }
 
@@ -426,37 +438,70 @@ func cmdRoomInfo(ctx context.Context, router *setup.Router, args []string) {
 	reply, err := cluster.Call(ctx, router, id, &room.RoomInfo{})
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
-	} else {
-		fmt.Printf("✓ Room %d 最大=%d 玩家=%v\n", rid, reply.MaxPlayers, reply.PlayerIds)
-	}
-}
-
-func cmdChat(ctx context.Context, router *setup.Router, args []string) {
-	if len(args) < 2 {
-		fmt.Println("用法: chat <channel> <message>")
 		return
 	}
-	id := chat.ChatId{Channel: args[0]}
-	msg := strings.Join(args[1:], " ")
-	reply, err := cluster.Call(ctx, router, id, &chat.SendMessage{Text: msg})
-	if err != nil {
-		fmt.Printf("错误: %v\n", err)
-	} else {
-		fmt.Printf("✓ [%s] %s → echo: %s\n", args[0], msg, reply.Echo)
+	fmt.Printf("✓ Room %d 最大=%d 当前人数=%d\n", rid, reply.MaxPlayers, len(reply.Players))
+	fmt.Printf("  成员: %v\n", reply.Players)
+	fmt.Printf("  聊天记录(%d):\n", len(reply.ChatLog))
+	for _, m := range reply.ChatLog {
+		fmt.Printf("    [%s] %s: %s\n", time.Unix(m.Time, 0).Format("15:04:05"), m.From, m.Content)
+	}
+	fmt.Printf("  战斗记录(%d):\n", len(reply.BattleLog))
+	for _, b := range reply.BattleLog {
+		fmt.Printf("    %s → %s 剩余HP=%d\n", b.Attacker, b.Target, b.Damage)
 	}
 }
 
-// ─── 跨 Actor 通信：Player → Room / Chat ───
+// ─── 跨 Actor 通信：Player → Room → 其他 Player ───
+
+// cmdRoomChat 演示玩家在房间内聊天：
+// Player 把聊天内容发给所在 Room，Room 广播给同房间所有玩家。
+func cmdRoomChat(ctx context.Context, router *setup.Router, args []string) {
+	if len(args) < 2 {
+		fmt.Println("用法: chat <playerId> <message>")
+		fmt.Println("  演示 Player → Room 跨 Actor 通信（玩家需先 pjoin 进入房间）")
+		return
+	}
+	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
+	msg := strings.Join(args[1:], " ")
+	reply, err := cluster.Call(ctx, router, id, &player.PlayerRoomChat{Content: msg})
+	if err != nil {
+		fmt.Printf("错误: %v\n", err)
+	} else if reply.Success {
+		fmt.Printf("✓ %s → Room 聊天: %s\n", args[0], msg)
+		fmt.Printf("  提示: 房间内各玩家日志会收到广播（用 roominfo 查看聊天记录）\n")
+	} else {
+		fmt.Printf("✗ %s 房间聊天失败: %s\n", args[0], reply.Reason)
+	}
+}
+
+// cmdLeaveRoom 演示玩家离开房间：Player → Room 跨 Actor 通信。
+func cmdLeaveRoom(ctx context.Context, router *setup.Router, args []string) {
+	if len(args) < 1 {
+		fmt.Println("用法: leave <playerId>")
+		fmt.Println("  演示 Player → Room 跨 Actor 通信（玩家需先 pjoin 进入房间）")
+		return
+	}
+	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
+	reply, err := cluster.Call(ctx, router, id, &player.ControlLeaveRoom{})
+	if err != nil {
+		fmt.Printf("错误: %v\n", err)
+	} else if !reply.Success {
+		fmt.Printf("✗ %s 离开房间失败: %s\n", args[0], reply.Reason)
+	} else {
+		fmt.Printf("✓ %s 已离开房间\n", args[0])
+	}
+}
 
 func cmdPlayerJoinRoom(ctx context.Context, router *setup.Router, args []string) {
 	if len(args) < 2 {
 		fmt.Println("用法: pjoin <playerId> <roomId>")
-		fmt.Println("  演示 Player → Room 跨 Actor 通信（Player handler 内 actor.Post → Room）")
+		fmt.Println("  演示 Player → Room 跨 Actor 通信（Player handler 内 actor.Call → Room）")
 		return
 	}
 	rid, _ := strconv.Atoi(args[1])
 	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
-	reply, err := cluster.Call(ctx, router, id, &player.PlayerJoinRoom{RoomId: rid})
+	reply, err := cluster.Call(ctx, router, id, &player.ControlJoinRoom{RoomId: rid})
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
 	} else {
@@ -464,26 +509,6 @@ func cmdPlayerJoinRoom(ctx context.Context, router *setup.Router, args []string)
 			fmt.Printf("✓ %s → PlayerJoinRoom(%d): %s\n", args[0], rid, reply.Reason)
 		} else {
 			fmt.Printf("✗ %s → PlayerJoinRoom(%d) 失败: %s\n", args[0], rid, reply.Reason)
-		}
-	}
-}
-
-func cmdPlayerSendChat(ctx context.Context, router *setup.Router, args []string) {
-	if len(args) < 3 {
-		fmt.Println("用法: psend <playerId> <channel> <message>")
-		fmt.Println("  演示 Player → Chat 跨 Actor 通信（Player handler 内 actor.Call → Chat）")
-		return
-	}
-	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
-	msg := strings.Join(args[2:], " ")
-	reply, err := cluster.Call(ctx, router, id, &player.PlayerSendChat{Channel: args[1], Text: msg})
-	if err != nil {
-		fmt.Printf("错误: %v\n", err)
-	} else {
-		if reply.Success {
-			fmt.Printf("✓ %s → Chat(%s): %s (echo=%s)\n", args[0], args[1], msg, reply.Echo)
-		} else {
-			fmt.Printf("✗ %s → Chat(%s) 失败: %s\n", args[0], args[1], reply.Reason)
 		}
 	}
 }
@@ -563,33 +588,36 @@ func cmdMigrate(mem *setup.DynamicMembership, router *setup.Router, args []strin
 func printHelp() {
 	fmt.Println("═══════ Player 命令 ═══════")
 	fmt.Println("  login <id> <hp>        创建玩家")
-	fmt.Println("  attack <id> <dmg>      攻击玩家")
-	fmt.Println("  heal <id> <amt>        治疗玩家")
+	fmt.Println("  attack <atk> <tgt>     房间内攻击玩家 (需同房间, 攻击方获得金币+经验)")
+	fmt.Println("  heal <id> <amt>        治疗玩家 (消耗金币, 受 MaxHP 上限约束)")
 	fmt.Println("  gold <id> <amt>        增加金币")
-	fmt.Println("  status <id>            查看完整状态")
+	fmt.Println("  status <id>            查看完整状态 (含 MaxHP/当前房间)")
 	fmt.Println("─────── 属性子模块 ───────")
-	fmt.Println("  exp <id> <amt>         增加经验")
+	fmt.Println("  exp <id> <amt>         增加经验 (满则升级: 提升Atk/Def/MaxHP并回满血)")
 	fmt.Println("  attrs <id>             查看属性")
-	fmt.Println("  upgrade <id> <stat>    升级属性 (atk/def/speed)")
+	fmt.Println("  upgrade <id> <stat>    升级属性 (atk/def/speed, 消耗金币)")
 	fmt.Println("─────── 道具子模块 ───────")
 	fmt.Println("  additem <id> <n> <name> <cnt> <type>  添加道具")
 	fmt.Println("  rmitem <id> <itemId> <cnt>            移除道具")
 	fmt.Println("  bag <id>                              查看背包")
-	fmt.Println("  use <id> <itemId>                     使用道具")
+	fmt.Println("  use <id> <itemId>                     使用道具 (potion回血受MaxHP约束)")
 	fmt.Println("─────── 技能子模块 ───────")
-	fmt.Println("  learn <id> <skId> <name> <cost>      学习技能")
-	fmt.Println("  cast <id> <skId> <target> <tx> <ty>  释放技能 (含坐标距离判定)")
+	fmt.Println("  learn <id> <skId> <name> <cost>      学习技能 (消耗金币)")
+	fmt.Println("  cast <id> <skId> <target> <tx> <ty>  释放技能 (真实伤害打到同房间目标)")
 	fmt.Println("  skills <id>                           技能列表")
 	fmt.Println("═══════ 其他命令 ═══════")
 	fmt.Println("  room <id> <max>        创建房间")
-	fmt.Println("  join <rid> <pid>       加入房间")
-	fmt.Println("  roominfo <id>          查询房间")
-	fmt.Println("  chat <ch> <msg>        发送消息")
+	fmt.Println("  join <rid> <pid>       加入房间 (Room.JoinRoom)")
+	fmt.Println("  roominfo <id>          查询房间(成员/聊天/战斗)")
 	fmt.Println("──── 跨Actor通信演示 ────")
-	fmt.Println("  pjoin <pid> <rid>      Player→Room (actor.Post)")
-	fmt.Println("  psend <pid> <ch> <msg> Player→Chat (actor.Call)")
+	fmt.Println("  pjoin <pid> <rid>      Player→Room (actor.Call, 记录当前房间)")
+	fmt.Println("  chat <pid> <msg>       玩家在房间内聊天 Player→Room→同房间广播")
+	fmt.Println("  attack <atk> <tgt>     玩家房间内攻击 Player→Player→Room广播")
+	fmt.Println("  leave <pid>            玩家离开房间 Player→Room")
 	fmt.Println("  info                   集群拓扑")
 	fmt.Println("  nodes                  节点状态")
 	fmt.Println("  migrate join/leave ... 模拟迁移")
 	fmt.Println("  quit                   退出")
+	fmt.Println("──── 成长闭环 ────")
+	fmt.Println("  攻击/技能→金币+经验 → 升级提升属性/上限 → 更强伤害 → 掉血用金币或药水回血续航")
 }

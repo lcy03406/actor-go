@@ -22,7 +22,7 @@ func (req *CheckOwnership) Handle(ctx *types.PlayerActorCtx, spawning bool) (act
 	_, leave := cluster.CheckOwnership(req.placement, nil, req.selfID, "Player", ctx.Id().String())
 	if leave {
 		log.Printf("[迁移] Player %s 应迁移 (HP=%d Level=%d Gold=%d)",
-			ctx.Id(), ctx.State().Data.HP, ctx.State().Data.Level, ctx.State().Data.Gold)
+			ctx.Id(), ctx.State().Data.HP, ctx.State().Data.Level, ctx.State().Data.Attr.Gold)
 	}
 	return actor.OK, nil
 }

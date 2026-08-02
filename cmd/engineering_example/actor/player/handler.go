@@ -11,6 +11,8 @@ import (
 	"github.com/lcy03406/actor-go/grain"
 	"github.com/lcy03406/actor-go/rpc"
 
+	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/combat"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/notify"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/attr"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/inventory"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/skill"
@@ -23,17 +25,29 @@ func Register(mgr *actor.Manager, rpcBld *rpc.RegistryBuilder[json.RawMessage, r
 		actor.RegisterSpawn(b, grain.WrapSpawnHandler2(pm, (*Login)(nil)))
 		rpc.RegisterRequest(rpcBld, &Login{})
 
-		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*Attack)(nil)))
-		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*Heal)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*ControlAttack)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*ControlHeal)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*AddGold)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*Close)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerStatusReq)(nil)))
 
-		// ★ 跨 Actor 通信：Player → Room、Player → Chat
+		// ★ 跨 Actor 通信：Player → Room
+		// Player 加入房间后，可在房间内与其他玩家聊天 / 战斗。
 		// Handler 中通过 ctx.Manager() 获取 Manager，
 		// 使用 actor.Post / actor.Call 向其他 Group 的 Actor 发送请求。
-		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerJoinRoom)(nil)))
-		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerSendChat)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*ControlJoinRoom)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerRoomChat)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*ControlLeaveRoom)(nil)))
+
+		// 以下为「落到本 Player 的事件」(Player*)，由其他 actor post 过来：
+		//   - combat.PlayerDamage    ：被攻击方受击（跨 actor 受击协议）
+		//   - combat.PlayerCombatResult：攻击方收到被攻击方回传的战斗结果 → 结算奖励
+		// 二者均注册 handler 以支持分发，但不通过 rpc.RegisterRequest 暴露为对外 RPC。
+		// 类型定义在 combat 包（跨 actor 协议），结算逻辑（PlayerCombatResult）在本包。
+		actor.RegisterQueryHandler2(b, (*combat.PlayerDamage)(nil))
+		actor.RegisterQueryHandler2(b, (*combat.PlayerCombatResult)(nil))
+		actor.RegisterServeHandler2(b, (*notify.ReceiveChat)(nil))
+		actor.RegisterServeHandler2(b, (*notify.ReceiveBattle)(nil))
 
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*attr.AddExp)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*attr.QueryAttr)(nil)))
@@ -44,8 +58,8 @@ func Register(mgr *actor.Manager, rpcBld *rpc.RegistryBuilder[json.RawMessage, r
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*inventory.ListItems)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*inventory.UseItem)(nil)))
 
-		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*skill.LearnSkill)(nil)))
-		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*skill.CastSkill)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*skill.ControlLearn)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*skill.ControlCast)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*skill.ListSkills)(nil)))
 
 		rpc.RegisterRequest(rpcBld, actor.RegisterServeHandler2(b, &CheckOwnership{placement: placement, selfID: selfID}))

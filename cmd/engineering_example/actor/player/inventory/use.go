@@ -34,8 +34,14 @@ func (req *UseItem) Handle(ctx *types.PlayerActorCtx, spawning bool) (*UseItemRe
 			switch item.Type {
 			case "potion":
 				heal := 30
+				// 受 MaxHP 上限约束（与 Heal 一致），避免溢出上限
+				oldHP := data.HP
 				data.HP += heal
-				effect = fmt.Sprintf("回复 %d HP (当前 HP=%d)", heal, data.HP)
+				if data.HP > data.MaxHP {
+					data.HP = data.MaxHP
+				}
+				realHeal := data.HP - oldHP
+				effect = fmt.Sprintf("回复 %d HP (当前 HP=%d)", realHeal, data.HP)
 			case "material":
 				effect = "使用材料，无直接效果"
 			case "weapon":

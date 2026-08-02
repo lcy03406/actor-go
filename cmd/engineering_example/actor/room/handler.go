@@ -17,6 +17,9 @@ func Register(mgr *actor.Manager, rpcBld *rpc.RegistryBuilder[json.RawMessage, r
 		rpc.RegisterRequest(rpcBld, actor.RegisterServeHandler2(b, (*CreateRoom)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*JoinRoom)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*RoomInfo)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterServeHandler2(b, (*RoomChat)(nil)))
+		actor.RegisterServeHandler2(b, (*RecordBattle)(nil))
+		actor.RegisterServeHandler2(b, (*LeaveRoom)(nil))
 
 		rpc.RegisterRequest(rpcBld, actor.RegisterServeHandler2(b, &CheckOwnership{placement: placement, selfID: selfID}))
 	})

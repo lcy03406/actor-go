@@ -23,7 +23,7 @@ func (req *CheckOwnership) Handle(ctx *actor.ActorContext[RoomId, RoomState], sp
 	_, leave := cluster.CheckOwnership(req.placement, nil, req.selfID, "Room", ctx.Id().String())
 	if leave {
 		log.Printf("[迁移] Room %s 应迁移到其他节点 (玩家数=%d)",
-			ctx.Id(), len(ctx.State().PlayerIds))
+			ctx.Id(), len(ctx.State().Players))
 	}
 	return actor.OK, nil
 }

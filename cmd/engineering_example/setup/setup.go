@@ -8,12 +8,11 @@
 // 【依赖方向】
 //
 //	player/ ──→ types/ + attr/ + inventory/ + skill/ + actor + rpc + cluster
-//	room/   ──→ actor 包
-//	chat/   ──→ actor 包
+//	room/   ──→ actor 包（含房间内聊天 / 战斗逻辑）
 //	  ↑
 //	  │  setup 只依赖一层子包
 //	  │
-//	main.go ──→ setup + player + room + chat
+//	main.go ──→ setup + player + room
 package setup
 
 import (
@@ -28,7 +27,6 @@ import (
 	"github.com/lcy03406/actor-go/grain"
 	"github.com/lcy03406/actor-go/rpc"
 
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/chat"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player"
 	playertypes "github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/types"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/room"
@@ -50,8 +48,7 @@ type (
 var GroupMapping = cluster.GroupMapping{
 	"player-server": {"Player"},
 	"room-server":   {"Room"},
-	"chat-server":   {"Chat"},
-	"all-in-one":    {"Player", "Room", "Chat"},
+	"all-in-one":    {"Player", "Room"},
 }
 
 // ─── NodeConfig ───
@@ -75,7 +72,6 @@ func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership
 
 	hasPlayer := cfg.NodeType == "player-server" || cfg.NodeType == "all-in-one"
 	hasRoom := cfg.NodeType == "room-server" || cfg.NodeType == "all-in-one"
-	hasChat := cfg.NodeType == "chat-server" || cfg.NodeType == "all-in-one"
 
 	// 构建集群拓扑
 	self := cluster.Node{ID: cfg.NodeID, Addr: cfg.Addr, Type: cfg.NodeType}
@@ -107,9 +103,6 @@ func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership
 		if hasRoom {
 			room.Register(mgr, b, placement, self.ID)
 		}
-		if hasChat {
-			chat.Register(mgr, b, placement, self.ID)
-		}
 	})
 	if err := server.Start(); err != nil {
 		return nil, nil, fmt.Errorf("启动 RPC Server 失败: %w", err)
@@ -137,11 +130,6 @@ func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership
 			actor.Broadcast[room.RoomId](mgr, &room.CheckOwnership{})
 		})
 	}
-	if hasChat {
-		coord.RegisterNotify(func() {
-			actor.Broadcast[chat.ChatId](mgr, &chat.CheckOwnership{})
-		})
-	}
 	go coord.Run(ctx, mem.Events())
 
 	return router, mem, nil
@@ -151,8 +139,6 @@ func inferTypeFromAddr(addr string) string {
 	switch {
 	case strings.Contains(addr, "8002"):
 		return "room-server"
-	case strings.Contains(addr, "8003"):
-		return "chat-server"
 	case strings.Contains(addr, "8004"):
 		return "all-in-one"
 	default:

@@ -6,14 +6,14 @@
 //
 //   1. room.JoinRoom（Room 包定义）— Room Actor 的内部请求类型
 //      Room 包定义它需要的参数（PlayerId string），Room handler 实现加入逻辑。
-//      任何 Actor（Player、Chat 或外部调用者）都可以向 Room 发送此请求。
+//      任何 Actor（Player 或外部调用者）都可以向 Room 发送此请求。
 //
-//   2. PlayerJoinRoom（本文件定义）— Player 对外公开的请求类型
+//   2. ControlJoinRoom（本文件定义）— Player 对外公开的请求类型
 //      Player 暴露"从 Player 视角加入房间"的操作语义。
 //      外部调用者（console/cluster.Call）通过此类型触发 Player，
 //      Player handler 内部再转发给 Room Actor。
 //
-//   ┌─────────┐  cluster.Call(router, pid, &player.PlayerJoinRoom{RoomId: 1})
+//   ┌─────────┐  cluster.Call(router, pid, &player.ControlJoinRoom{RoomId: 1})
 //   │ console │ ─────────────────────────────────────────────────────────→ ┌──────────┐
 //   └─────────┘                                                            │  Player   │
 //                                                                          │  Handle() │
@@ -43,20 +43,20 @@ import (
 	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/room"
 )
 
-// PlayerJoinRoom 是 Player 加入房间的请求（Player 对外公开的类型）。
+// ControlJoinRoom 是 Player 加入房间的请求（Player 对外公开的类型）。
 // 请求字段全部是 JSON 可序列化的，通过 RPC 传输后反序列化不会丢失数据。
-type PlayerJoinRoom struct {
+type ControlJoinRoom struct {
 	RoomId int `json:"roomId"`
 }
 
-// PlayerJoinRoomReply 是 Player 加入房间的回复。
-type PlayerJoinRoomReply struct {
+// ControlJoinRoomReply 是 Player 加入房间的回复。
+type ControlJoinRoomReply struct {
 	Success      bool   `json:"success"`
 	CurrentCount int    `json:"currentCount"`
 	Reason       string `json:"reason,omitempty"`
 }
 
-func (*PlayerJoinRoom) ReqType(_ types.PlayerId, _ *PlayerJoinRoomReply) string { return "PlayerJoinRoom" }
+func (*ControlJoinRoom) ReqType(_ types.PlayerId, _ *ControlJoinRoomReply) string { return "ControlJoinRoom" }
 
 // Handle 处理 Player 加入 Room 的请求。
 //
@@ -64,26 +64,29 @@ func (*PlayerJoinRoom) ReqType(_ types.PlayerId, _ *PlayerJoinRoomReply) string 
 //   - ctx.Manager() 获取 Manager，支持跨 Group 通信
 //   - actor.Post 是 fire-and-forget 模式，不等待回复
 //   - Manager 自动根据 room.RoomId.ActorType() 路由到 Room Group
-func (req *PlayerJoinRoom) Handle(ctx *types.PlayerActorCtx, spawning bool) (*PlayerJoinRoomReply, error) {
+func (req *ControlJoinRoom) Handle(ctx *types.PlayerActorCtx, spawning bool) (*ControlJoinRoomReply, error) {
 	roomId := room.RoomId{RoomId: req.RoomId}
-	playerId := ctx.Id().String()
+	playerId := ctx.Id()
 
-	// ★ 跨 Group Actor 通信：Player → Room（fire-and-forget 模式）
-	// ctx.Manager() 返回 Manager，通过 actor.Post 向 Room Actor 发送消息
-	err := actor.Post(ctx.Manager(), roomId, &room.JoinRoom{
-		PlayerId: playerId,
-	})
+	// ★ 跨 Group Actor 通信：Player → Room（request-response 模式）
+	// ctx.Manager() 返回 Manager，通过 actor.Call 向 Room Actor 发送消息并等待回复。
+	reply, err := actor.Call(ctx.Context(), ctx.Manager(), roomId, &room.JoinRoom{Player: playerId})
 	if err != nil {
 		log.Printf("[Player] %s 加入 Room(%d) 失败: %v", playerId, req.RoomId, err)
-		return &PlayerJoinRoomReply{
+		return &ControlJoinRoomReply{
 			Success: false,
 			Reason:  fmt.Sprintf("Room(%d) 不可用: %v", req.RoomId, err),
 		}, nil
 	}
 
-	log.Printf("[Player] %s 成功加入 Room(%d) — 跨 Actor Post", playerId, req.RoomId)
-	return &PlayerJoinRoomReply{
-		Success: true,
-		Reason:  fmt.Sprintf("Player %s 已通过 actor.Post 加入 Room(%d)", playerId, req.RoomId),
+	// 记录当前所在房间，供后续的聊天 / 战斗请求使用。
+	ctx.State().Data.CurrentRoom = req.RoomId
+
+	log.Printf("[Player] %s 成功加入 Room(%d) — 跨 Actor Call, 当前房间人数=%d",
+		playerId, req.RoomId, reply.CurrentCount)
+	return &ControlJoinRoomReply{
+		Success:      true,
+		CurrentCount: reply.CurrentCount,
+		Reason:       fmt.Sprintf("Player %s 已加入 Room(%d), 当前 %d 人", playerId, req.RoomId, reply.CurrentCount),
 	}, nil
 }

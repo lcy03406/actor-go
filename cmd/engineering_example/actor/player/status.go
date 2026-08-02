@@ -8,8 +8,11 @@ type PlayerStatusReq struct{}
 
 type PlayerStatusReply struct {
 	HP    int  `json:"hp"`
+	MaxHP int  `json:"maxHP"`
 	Level int  `json:"level"`
 	Gold  int  `json:"gold"`
+
+	CurrentRoom int `json:"currentRoom"`
 
 	Attr      types.AttrState      `json:"attr"`
 	Inventory types.InventoryState `json:"inventory"`
@@ -21,7 +24,7 @@ func (*PlayerStatusReq) ReqType(_ types.PlayerId, _ *PlayerStatusReply) string {
 func (req *PlayerStatusReq) Handle(ctx *types.PlayerActorCtx, spawning bool) (*PlayerStatusReply, error) {
 	d := ctx.State().Data
 	return &PlayerStatusReply{
-		HP: d.HP, Level: d.Level, Gold: d.Gold,
+		HP: d.HP, MaxHP: d.MaxHP, Level: d.Level, Gold: d.Attr.Gold, CurrentRoom: d.CurrentRoom,
 		Attr: d.Attr, Inventory: d.Inventory, Skill: d.Skill,
 	}, nil
 }

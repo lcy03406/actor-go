@@ -18,7 +18,7 @@ func (*AddGold) ReqType(_ types.PlayerId, _ *AddGoldReply) string { return "AddG
 
 func (req *AddGold) Handle(ctx *types.PlayerActorCtx, spawning bool) (*AddGoldReply, error) {
 	data := &ctx.State().Data
-	data.Gold += req.Amount
-	log.Printf("[Player] %s 获得 %d 金币, 总计=%d", ctx.Id(), req.Amount, data.Gold)
-	return &AddGoldReply{NewGold: data.Gold}, nil
+	data.Attr.AddGold(req.Amount)
+	log.Printf("[Player] %s 获得 %d 金币, 总计=%d", ctx.Id(), req.Amount, data.Attr.Gold)
+	return &AddGoldReply{NewGold: data.Attr.Gold}, nil
 }
