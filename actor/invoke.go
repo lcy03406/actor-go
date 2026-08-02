@@ -17,9 +17,10 @@ func errorResult[R PtrReply[R0], R0 any](err error) (res result[R, R0]) {
 }
 
 type invoke[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
-	h   *handlerEntry[A, S, Q, R, Q0, R0]
-	req Q
-	ch  chan result[R, R0]
+	h     *handlerEntry[A, S, Q, R, Q0, R0]
+	req   Q
+	ch    chan result[R, R0]
+	clean func(R)
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) CanSpawn() bool {
@@ -39,6 +40,13 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Allow(id A, spawning bool) bool {
 func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning bool) {
 	rep, err := i.h.fn(actor, i.req, spawning)
 	if i.ch != nil {
+		if rep != nil && i.clean != nil {
+			defer func() {
+				if r := recover(); r != nil {
+					i.clean(rep)
+				}
+			}()
+		}
 		i.ch <- result[R, R0]{rep, err}
 	}
 }

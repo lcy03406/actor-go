@@ -101,14 +101,45 @@ func Call[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](ct
 	if err != nil {
 		return nil, &GroupNotFoundError{id}
 	}
-	ch, err := gh.h.handlerCall(gh.g, id, req)
+	ch, err := gh.h.handlerCall(gh.g, id, req, nil)
 	if err != nil {
 		return nil, err
 	}
+	return waitResult(ctx, ch)
+}
+
+func waitResult[R PtrReply[R0], R0 any](ctx context.Context, ch <-chan result[R, R0]) (R, error) {
 	select {
 	case result := <-ch:
 		return result.Rep, result.Err
 	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func SafeCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, id A, req Q) (R, error) {
+	gh, err := findHandler(mgr, id, req)
+	if err != nil {
+		return nil, &GroupNotFoundError{id}
+	}
+	ch, err := gh.h.handlerCall(gh.g, id, req, R.Close)
+	if err != nil {
+		return nil, err
+	}
+	return safeResult(ctx, ch)
+}
+
+func safeResult[R SafeReply[R0], R0 any](ctx context.Context, ch chan result[R, R0]) (R, error) {
+	select {
+	case result := <-ch:
+		return result.Rep, result.Err
+	case <-ctx.Done():
+		close(ch)
+		for result := range ch {
+			if rep := result.Rep; rep != nil {
+				rep.Close()
+			}
+		}
 		return nil, ctx.Err()
 	}
 }

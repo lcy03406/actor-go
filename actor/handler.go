@@ -9,7 +9,7 @@ type handler[A ActorId] interface {
 }
 
 type handlerBase[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] interface {
-	handlerCall(gb groupBase[A], id A, req Q) (chan result[R, R0], error)
+	handlerCall(gb groupBase[A], id A, req Q, recoverFn func(R)) (chan result[R, R0], error)
 	handlerPost(gb groupBase[A], id A, req Q) error
 	handlerBroadcast(gb groupBase[A], req Q) (int, error)
 	handlerMulticast(gb groupBase[A], ids []A, req Q) (int, error)
@@ -25,7 +25,7 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) ReqType() string {
 	return h.reqType
 }
 
-func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(gb groupBase[A], id A, req Q) (chan result[R, R0], error) {
+func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(gb groupBase[A], id A, req Q, clean func(R)) (chan result[R, R0], error) {
 	g := gb.(*group[A, S])
 	a := g.resolveActor(id, h.allow_spawn)
 	if a == nil {
@@ -34,9 +34,10 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(gb groupBase[A], id A, re
 	defer a.unhold()
 	ch := make(chan result[R, R0], 1)
 	i := &invoke[A, S, Q, R, Q0, R0]{
-		h:   h,
-		req: req,
-		ch:  ch,
+		h:     h,
+		req:   req,
+		ch:    ch,
+		clean: clean,
 	}
 	if err := a.send(i); err != nil {
 		return nil, err

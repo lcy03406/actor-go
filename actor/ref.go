@@ -85,11 +85,31 @@ func RefCall[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 
 		var zero R
 		return zero, err
 	}
-	select {
-	case res := <-ch:
-		return res.Rep, res.Err
-	case <-ctx.Done():
+	return waitResult(ctx, ch)
+}
+
+// RefSafeCall 通过 ActorRef 向目标 Actor 发送请求并等待回复，绕过 Group 查找。
+// 消息处理仍受 handler 注册类型的 spawn/query 约束，与标准 Call 语义一致。
+func RefSafeCall[A ActorId, S anyState, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, ref *ActorRef[A, S], req Q) (R, error) {
+	if ref.target.closed.Load() {
 		var zero R
-		return zero, ctx.Err()
+		return zero, &ActorClosedError{ref.target.id}
 	}
+	gh, err := findHandler(ref.mgr, ref.target.id, req)
+	if err != nil {
+		var zero R
+		return zero, err
+	}
+	ch := make(chan result[R, R0], 1)
+	i := &invoke[A, S, Q, R, Q0, R0]{
+		h:     gh.h.(*handlerEntry[A, S, Q, R, Q0, R0]),
+		req:   req,
+		ch:    ch,
+		clean: R.Close,
+	}
+	if err := ref.target.send(i); err != nil {
+		var zero R
+		return zero, err
+	}
+	return safeResult(ctx, ch)
 }

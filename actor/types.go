@@ -28,6 +28,11 @@ type PtrReply[R0 any] interface {
 	~*R0
 }
 
+type SafeReply[R0 any] interface {
+	~*R0
+	Close()
+}
+
 type PtrRequest[Q0 any] interface {
 	~*Q0
 }
