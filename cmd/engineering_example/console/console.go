@@ -80,6 +80,10 @@ func Run(ctx context.Context, router *setup.Router, mem *setup.DynamicMembership
 			cmdRoomInfo(ctx, router, args)
 		case "chat":
 			cmdChat(ctx, router, args)
+		case "pjoin":
+			cmdPlayerJoinRoom(ctx, router, args)
+		case "psend":
+			cmdPlayerSendChat(ctx, router, args)
 		case "info":
 			printClusterInfo(router)
 		case "nodes":
@@ -442,6 +446,48 @@ func cmdChat(ctx context.Context, router *setup.Router, args []string) {
 	}
 }
 
+// ─── 跨 Actor 通信：Player → Room / Chat ───
+
+func cmdPlayerJoinRoom(ctx context.Context, router *setup.Router, args []string) {
+	if len(args) < 2 {
+		fmt.Println("用法: pjoin <playerId> <roomId>")
+		fmt.Println("  演示 Player → Room 跨 Actor 通信（Player handler 内 actor.Post → Room）")
+		return
+	}
+	rid, _ := strconv.Atoi(args[1])
+	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
+	reply, err := cluster.Call(ctx, router, id, &player.PlayerJoinRoom{RoomId: rid})
+	if err != nil {
+		fmt.Printf("错误: %v\n", err)
+	} else {
+		if reply.Success {
+			fmt.Printf("✓ %s → PlayerJoinRoom(%d): %s\n", args[0], rid, reply.Reason)
+		} else {
+			fmt.Printf("✗ %s → PlayerJoinRoom(%d) 失败: %s\n", args[0], rid, reply.Reason)
+		}
+	}
+}
+
+func cmdPlayerSendChat(ctx context.Context, router *setup.Router, args []string) {
+	if len(args) < 3 {
+		fmt.Println("用法: psend <playerId> <channel> <message>")
+		fmt.Println("  演示 Player → Chat 跨 Actor 通信（Player handler 内 actor.Call → Chat）")
+		return
+	}
+	id := types.PlayerId{ServerId: 1, OpenId: args[0]}
+	msg := strings.Join(args[2:], " ")
+	reply, err := cluster.Call(ctx, router, id, &player.PlayerSendChat{Channel: args[1], Text: msg})
+	if err != nil {
+		fmt.Printf("错误: %v\n", err)
+	} else {
+		if reply.Success {
+			fmt.Printf("✓ %s → Chat(%s): %s (echo=%s)\n", args[0], args[1], msg, reply.Echo)
+		} else {
+			fmt.Printf("✗ %s → Chat(%s) 失败: %s\n", args[0], args[1], reply.Reason)
+		}
+	}
+}
+
 // ─── 集群 ───
 
 func printClusterInfo(router *setup.Router) {
@@ -539,6 +585,9 @@ func printHelp() {
 	fmt.Println("  join <rid> <pid>       加入房间")
 	fmt.Println("  roominfo <id>          查询房间")
 	fmt.Println("  chat <ch> <msg>        发送消息")
+	fmt.Println("──── 跨Actor通信演示 ────")
+	fmt.Println("  pjoin <pid> <rid>      Player→Room (actor.Post)")
+	fmt.Println("  psend <pid> <ch> <msg> Player→Chat (actor.Call)")
 	fmt.Println("  info                   集群拓扑")
 	fmt.Println("  nodes                  节点状态")
 	fmt.Println("  migrate join/leave ... 模拟迁移")

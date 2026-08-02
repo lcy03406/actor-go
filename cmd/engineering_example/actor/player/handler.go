@@ -29,6 +29,12 @@ func Register(mgr *actor.Manager, rpcBld *rpc.RegistryBuilder[json.RawMessage, r
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*Close)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerStatusReq)(nil)))
 
+		// ★ 跨 Actor 通信：Player → Room、Player → Chat
+		// Handler 中通过 ctx.Manager() 获取 Manager，
+		// 使用 actor.Post / actor.Call 向其他 Group 的 Actor 发送请求。
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerJoinRoom)(nil)))
+		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*PlayerSendChat)(nil)))
+
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*attr.AddExp)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*attr.QueryAttr)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*attr.UpgradeAttr)(nil)))

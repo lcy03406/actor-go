@@ -373,7 +373,75 @@ func TestMultiPlayerConcurrent(t *testing.T) {
 	}
 }
 
-// ─── Close ───
+// ─── 跨 Actor 通信：Player → Room / Chat ───
+
+func TestPlayerCrossActorRoom(t *testing.T) {
+	n := startTestNode(t)
+	defer n.Close()
+	ctx := context.Background()
+
+	// 1. 创建 Player
+	p1 := pid("cross_room_player")
+	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1}); err != nil {
+		t.Fatalf("创建玩家失败: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. 创建 Room
+	r1 := room.RoomId{RoomId: 200}
+	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10}); err != nil {
+		t.Fatalf("创建房间失败: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 3. Player 通过 PlayerJoinRoom 请求加入 Room（Player handler 内 actor.Post → Room）
+	joinReply, err := cluster.Call(ctx, n.router, p1, &player.PlayerJoinRoom{RoomId: 200})
+	if err != nil {
+		t.Fatalf("Player 加入房间失败: %v", err)
+	}
+	if !joinReply.Success {
+		t.Errorf("Player 加入房间应成功: %s", joinReply.Reason)
+	}
+
+	// 4. 验证 Room 状态已更新
+	time.Sleep(30 * time.Millisecond)
+	roomInfo, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
+	if err != nil {
+		t.Fatalf("查询房间失败: %v", err)
+	}
+	if roomInfo.MaxPlayers != 10 {
+		t.Errorf("MaxPlayers 期望=10, 实际=%d", roomInfo.MaxPlayers)
+	}
+}
+
+func TestPlayerCrossActorChat(t *testing.T) {
+	n := startTestNode(t)
+	defer n.Close()
+	ctx := context.Background()
+
+	// 1. 创建 Player
+	p1 := pid("cross_chat_player")
+	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1}); err != nil {
+		t.Fatalf("创建玩家失败: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. Player 通过 PlayerSendChat 发送聊天消息（Player handler 内 actor.Call → Chat）
+	chatReply, err := cluster.Call(ctx, n.router, p1, &player.PlayerSendChat{
+		Channel: "world",
+		Text:    "Hello from Player!",
+	})
+	if err != nil {
+		t.Fatalf("Player 发送聊天失败: %v", err)
+	}
+	if !chatReply.Success {
+		t.Errorf("Player 发送聊天应成功: %s", chatReply.Reason)
+	}
+	expectedEcho := "[Player(1,cross_chat_player)]: Hello from Player!"
+	if chatReply.Echo != expectedEcho {
+		t.Errorf("Echo 期望='%s', 实际='%s'", expectedEcho, chatReply.Echo)
+	}
+}
 
 func TestPlayerClose(t *testing.T) {
 	n := startTestNode(t)

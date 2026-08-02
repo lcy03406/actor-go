@@ -62,6 +62,18 @@ func (a *ActorContext[A, S]) Logger() *slog.Logger {
 	return a.actor.logger
 }
 
+// Manager 返回 Actor 系统顶层 Manager，用于跨 Group 的 Actor 通信。
+// 通过 Manager 可以向其他 Group 的 Actor 发送 Post/Call/Broadcast 消息。
+//
+// 示例：
+//
+//	// 在 Player handler 中向 Room Actor 发送消息
+//	roomId := room.RoomId{RoomId: 123}
+//	actor.Post(ctx.Manager(), roomId, &room.JoinRoom{PlayerId: ctx.Id().String()})
+func (a *ActorContext[A, S]) Manager() *Manager {
+	return a.actor.g.mgr
+}
+
 // Quit 请求 Actor 退出：只设置 active=false。
 // 不直接操作 mailbox/quit——由 run goroutine 在 handler 返回后检测到 !active
 // 自行调用 requestClose（只有 run 的拥有者才关自己的退出信号）。
