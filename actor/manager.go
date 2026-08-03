@@ -105,8 +105,8 @@ func Post[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mg
 }
 
 // Call 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
-// Go 从 reply 参数推导 R 类型，且 Q 的 ReqType(A, *R) 方法签名确保
-// Q、A、R 三方匹配，不匹配会在编译期报错。
+// R 由显式类型参数或 req 的 ReqType(A, *R) 方法签名推导，且 Q 的 ReqType
+// 签名确保 Q、A、R 三方匹配，不匹配会在编译期报错。
 //
 //	reply, err := actor.Call[TestActorId](ctx, mgr, id, &TestAdd{Add: 10})
 //	if err != nil { ... }

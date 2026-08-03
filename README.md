@@ -62,19 +62,11 @@ actor-go/
 │   ├── driver_redis.go       # Redis driver
 │   └── driver_mongo.go       # MongoDB driver
 ├── cluster/                  # distributed clustering
-│   ├── cluster.go            # Cluster entry
-│   ├── node.go               # node management
-│   ├── membership.go         # member discovery
-│   ├── placement.go          # Actor placement
-│   ├── route.go              # routing
-│   └── transport.go          # node-to-node transport
-├── lease/                    # distributed lease
-│   ├── lease.go              # Lease interface
-│   ├── local_lease.go        # local (single-node)
-│   ├── redis_lease.go        # Redis lease
-│   ├── mongo_lease.go        # MongoDB lease
-│   ├── sql_lease.go          # SQL lease
-│   └── retry.go              # retry strategies
+│   ├── cluster.go            # Router + lease retry routing
+│   ├── node.go               # node types (Node, NodeSet, MemberEvent)
+│   ├── membership.go         # Membership interface + events
+│   ├── placement.go          # PlacementStrategy (consistent hash, group aware)
+│   └── migration.go          # ownership migration (ShouldOwn)
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── CHANGELOG.md
@@ -554,7 +546,6 @@ Actors are **not** activated automatically before handling the spawn message. Yo
 import (
     "github.com/lcy03406/actor-go/actor"
     "github.com/lcy03406/actor-go/grain"
-    "github.com/lcy03406/actor-go/lease"
 )
 
 // Use ShotSelf when business data is directly serializable
@@ -566,12 +557,10 @@ type PlayerData struct {
 // State type alias for readability
 type GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
 
-// Create PersistenceManager
+// Create PersistenceManager: lease is built into the driver, no separate lease manager needed
 pm := grain.NewPersistenceManager(
     grain.WithDriver(grain.NewJsonDriver("./data")),
-    grain.WithLeaseManager(lease.NewLocalManager(30*time.Second)),
     grain.WithNodeId("node-1"),
-    grain.WithRenewInterval(30*time.Second),
 )
 
 // Register: spawn handler explicitly activates the Grain
@@ -607,9 +596,8 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
 ```go
 state := ctx.State()
 state.Data           // your business data (D)
-state.Persist(ctx)   // save now, keep running
+state.Persist(ctx)   // save now, keep running (also renews the lease TTL)
 state.Deactivate(ctx)  // save + release lease + quit
-state.RenewLease(ctx)  // manual lease renewal (auto if RenewInterval > 0)
 ```
 
 ### Lifecycle
@@ -637,33 +625,27 @@ state.RenewLease(ctx)  // manual lease renewal (auto if RenewInterval > 0)
 
 ## Cluster
 
-The `cluster` package provides the building blocks for distributed Actor
-placement across multiple nodes:
+The `cluster` package provides distributed Actor placement and routing
+across multiple nodes:
 
-- **Membership**: node discovery and health checks (`Membership` interface,
-  `StaticMembership` implementation)
+- **Membership**: cluster member management (`Membership` interface with
+  `Self` / `Members` / `Events` / `Join` / `Leave` / `Close`).
 - **Placement**: decides which node owns each Actor (`PlacementStrategy`
-  interface, `ConsistentHashPlacement` implementation)
-- **Routing**: per-message route decision (`Route` / `RouteResult`, returns
-  `RouteLocal` / `RouteForward` / `RouteFail`)
-- **Transport**: node-to-node message forwarding (`Transport` interface,
-  `HTTPTransport` implementation)
-
-> **Status — building blocks only, not yet wired into a forwarding path.**
-> The pieces above are implemented and unit-tested, but no code in the
-> project currently uses them to forward a real message. Specifically:
->
-> - No caller invokes `Cluster.Resolve()` and then acts on a `RouteForward`
->   result by calling `Transport.ForwardCall` / `ForwardPost`. The only
->   references live in `cluster_test.go`.
-> - No HTTP handler is registered for the `/cluster/{actorType}` endpoint
->   that `HTTPTransport` posts to. A receiving node needs this handler to
->   unpack a `RoutedMessage` and dispatch it to the local `actor.Manager`.
->
-> `grain` only handles leasing and persistence; it does not participate in
-> message forwarding. Closing this gap — an auto-forward layer that bridges
-> `Resolve` and `Transport`, plus the matching server-side handler — is
-> planned to live in the `cluster` package itself.
+  interface; `ConsistentHashPlacement` and `GroupAwarePlacement`
+  implementations). A `GroupMapping` restricts which node types host which
+  Actor types for heterogeneous clusters.
+- **Routing**: `Router` wraps Membership + Placement + an `rpc.Client`
+  pool. It picks the preferred node per Actor and routes locally (via
+  `actor.Manager`) or remotely (via `rpc.Client`) automatically.
+- **Call API**: `cluster.Post` / `cluster.Call` / `cluster.Broadcast` /
+  `cluster.Multicast` mirror the `actor` package APIs but transparently
+  forward to the owner node.
+- **Lease retry**: `Router` optionally integrates with Grain leases via
+  `WithLeaseRetry` / `WithForceReleaser`; on `ErrLeaseTaken` it forwards to
+  the current owner or force-releases the lease before retrying.
+- **Migration**: `ShouldOwn(placement, members, selfID, actorType, actorId)`
+  tells a node whether it should own a given Actor, used to drive graceful
+  ownership hand-off (see `cluster_example`).
 
 ## Design Highlights
 
