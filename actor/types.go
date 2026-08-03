@@ -31,20 +31,24 @@ type PtrReply[R0 any] interface {
 	~*R0
 }
 
-// SafeReply 是"需显式释放"的回复类型约束，在 PtrReply 基础上额外要求实现 Close 方法。
+// SafeReply 是"资源安全"的回复类型约束，在 PtrReply（~*R0）基础上额外要求实现 Close 方法。
 //
-// "安全"仅指一条自动释放通道：当 handler 成功返回 reply，且该 reply 正常送达调用方时，
-// 框架会在调用方读取完回复后自动调用 Close 释放资源。
+// 当 handler 返回的 reply 持有需要释放的底层资源（连接句柄、文件描述符、内存映射等）时，
+// 框架保证该 reply 在"调用方拿不到"的情况下一定会被 Close，避免资源泄漏：
 //
-// 除此之外的情况仍需调用方或 handler 自行负责释放，否则会泄漏：
-//   - 调用方拿到 reply 后若想继续持有（按业务需要暂存），则不应依赖框架自动 Close，
-//     应在用完该 reply 后自行调用 Close；
-//   - 若 handler 返回 error（而非 reply），框架不会自动 Close，临时创建的 reply
-//     必须由 handler 在返回错误前自行释放；
-//   - 若回复在传递途中被丢弃（如 context 取消），框架也会尝试 Close。
+//   - 成功送达：reply 正常交到调用方手中，Close 由调用方负责（用完即 Close，如 defer r.Close()）；
+//   - 调用方超时 / ctx 被取消：reply 成为"孤儿"，SafeCall 在 ctx.Done() 分支自动 Close 回收资源；
+//   - handler 处理中 panic：invoke 的 recover 分支自动 Close；
+//   - handler 返回 error：不会产出 reply（rep 为 nil），由 handler 在返回错误前自行释放临时资源。
+//
+// 调用方需注意：
+//   - 成功拿到 reply 后，必须在用完该 reply 后显式调用 Close；框架不会在成功路径上自动 Close，
+//     若不手动 Close 则会泄漏。超时/取消/panic 这几种情况下框架会自动 Close，但调用方此时
+//     拿不到 reply，因此框架与调用方不会重复 Close 同一个 reply；
+//   - 虽然框架不会重复 Close，但调用方可能因暂存、转发而多次 Close，建议把 Close 实现成幂等
 //
 // SafeReply 仅用于 SafeCall / RefSafeCall 这两条安全回复路径；对应的普通路径
-// Call / RefCall 使用 PtrReply，不要求 Close。
+// Call / RefCall 使用 PtrReply，不要求 Close，回复被丢弃时也不会触发回收。
 type SafeReply[R0 any] interface {
 	~*R0
 	Close()
