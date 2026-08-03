@@ -97,6 +97,65 @@ actor-go/
 - Generic operations are package-level functions (Go methods cannot have independent type parameters).
 - `A` is inferred from `Request[A, R]`; `S` is inferred from `Serve` registration.
 
+### Serial Design (Single-Threaded Event Loop)
+
+Each Actor is a **single-threaded state machine**. All messages addressed to the same
+Actor are processed strictly one-at-a-time in the order they arrive — there is never
+concurrent access to an Actor's state, so handlers need no locks or mutexes.
+
+```
+         multiple senders (goroutines)
+                │  Post / Call / RefPost / RefCall
+                ▼
+        ┌───────────────────────┐
+        │   buffered channel     │   ← mailbox (FIFO)
+        │   (mailbox chan)       │
+        └───────────┬───────────┘
+                    │  ← one message at a time, dequeued by run()
+                    ▼
+        ┌───────────────────────┐
+        │   actorRuntime.run()   │   ← the ONLY goroutine touching this
+        │   (event loop)         │      Actor's state & context
+        │  for msg in mailbox:   │
+        │    invoke handler      │
+        └───────────┬───────────┐
+                    │
+                    ▼
+            handler mutates ctx.State()  (no locking required)
+```
+
+**How it works**
+
+1. **One goroutine per Actor.** `resolveActor` spawns the Actor with `go actor.run()`
+   exactly once. From then on, that single goroutine owns the Actor's `State` and
+   `ActorContext` for its entire lifetime — no other goroutine ever touches them.
+2. **Serial mailbox.** Senders do not call the handler directly. They push an
+   `invokable` onto the Actor's buffered `mailbox` channel (`send`). The `run` loop
+   pops messages in FIFO order and invokes handlers in the same sequence.
+3. **Batched, in-order execution.** `run` pumps all currently-available messages
+   into a batch and invokes them sequentially (`invokeBatch`), preserving order.
+   Each handler completes fully before the next begins.
+4. **No shared-state races.** Because state mutation happens only inside the
+   `run` goroutine, `ctx.State()` reads/writes are race-free by construction —
+   you do not need `sync.Mutex` inside handlers.
+5. **Concurrency happens *between* Actors, not *within* one.** Different Actors
+   run in different goroutines and may execute handlers in parallel; the guarantee
+   is that a *single* Actor never processes two messages at once.
+
+**Implications for handler authors**
+
+- You may freely mutate `ctx.State()` and call `ctx.SetState(...)` without locks.
+- A slow or blocking handler delays only that Actor's own mailbox — not other Actors.
+  Offload long work (I/O, compute) via `ctx.Timer`, `ctx.Ref`, or by replying
+  early, so the event loop stays responsive.
+- Cross-Actor ordering is not guaranteed: if `A` then `B` both message `C`, the
+  order they reach `C`'s mailbox depends on scheduling. Model causal ordering
+  explicitly (e.g. `C` replies to `A`, then `A` messages `B`) when required.
+
+> This is the core of the Actor Model: isolation through serialization. The
+> framework enforces it structurally, so correctness does not depend on the
+> handler author remembering to lock.
+
 ### Type Safety
 
 - **`Request[A, R]`**: `ReqType(A, *R) string` ensures compile-time `A`/`Q`/`R` match.

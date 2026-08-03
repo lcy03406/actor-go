@@ -95,6 +95,61 @@ actor-go/
 - 泛型操作以包级函数形式提供（Go 的方法无法拥有独立的类型参数）。
 - `A` 由 `Request[A, R]` 推导；`S` 由 `Serve` 注册推导。
 
+### 串行设计（单线程事件循环）
+
+每个 Actor 都是一个**单线程状态机**。发送给同一个 Actor 的所有消息都严格按照
+到达顺序、一次只处理一个 —— 其状态永远不会被并发访问，因此处理器无需加锁或使用互斥量。
+
+```
+         多个发送方（goroutine）
+                │  Post / Call / RefPost / RefCall
+                ▼
+        ┌───────────────────────┐
+        │   带缓冲的 channel      │   ← 邮箱（FIFO 先进先出）
+        │   (mailbox chan)       │
+        └───────────┬───────────┘
+                    │  ← 一次取一条，由 run() 顺序出队
+                    ▼
+        ┌───────────────────────┐
+        │   actorRuntime.run()   │   ← 唯一能触碰该 Actor
+        │   （事件循环）          │      State 与 Context 的 goroutine
+        │  for msg in mailbox:   │
+        │    invoke handler       │
+        └───────────┬───────────┘
+                    │
+                    ▼
+            handler 修改 ctx.State()  （无需加锁）
+```
+
+**工作原理**
+
+1. **每 Actor 一个 goroutine**。`resolveActor` 仅通过 `go actor.run()` 创建一次
+   Actor。此后，该唯一 goroutine 在整个生命周期内独占该 Actor 的 `State` 与
+   `ActorContext` —— 其他 goroutine 永不触碰。
+2. **串行邮箱**。发送方不会直接调用处理器，而是将一个 `invokable` 推入 Actor 的
+   带缓冲 `mailbox` channel（`send`）。`run` 循环按 FIFO 顺序出队并依次调用处理器。
+3. **批量、保序执行**。`run` 将当前可取到的全部消息批量取出（`pumpMailbox`），
+   再按原顺序逐个调用（`invokeBatch`），保证顺序。每条消息的处理都完整结束后
+   才开始下一条。
+4. **无共享状态竞争**。由于状态变更只发生在 `run` 这一个 goroutine 内，
+   `ctx.State()` 的读写天然无数据竞争 —— 处理器内部无需 `sync.Mutex`。
+5. **并发发生在 Actor *之间*，而非单个 Actor *之内***。不同的 Actor 运行在
+   不同的 goroutine 中，可以真正并行执行；框架保证的是：*单个* Actor 绝不会
+   同时处理两条消息。
+
+**对处理器编写者的启示**
+
+- 你可以放心地修改 `ctx.State()`、调用 `ctx.SetState(...)`，无需加锁。
+- 一个缓慢或阻塞的处理器只会拖慢该 Actor *自身*的邮箱 —— 不影响其他 Actor。
+  长耗时工作（I/O、计算）应通过 `ctx.Timer`、`ctx.Ref`，或尽早回复来卸出，
+  使事件循环保持响应。
+- Actor 之间**不保证**跨 Actor 的到达顺序：若 `A` 与 `B` 先后都给 `C` 发消息，
+  它们到达 `C` 邮箱的顺序取决于调度。需要因果顺序时请用显式建模（例如 `C` 先
+  回复 `A`，再由 `A` 去通知 `B`）。
+
+> 这正是 Actor 模型的核心：通过「串行化」实现隔离。框架在结构上强制了这一点，
+> 因此正确性不依赖于处理器作者是否记得加锁。
+
 ### 类型安全
 
 - **`Request[A, R]`**：`ReqType(A, *R) string` 确保编译期 `A`/`Q`/`R` 匹配。
