@@ -156,6 +156,50 @@ concurrent access to an Actor's state, so handlers need no locks or mutexes.
 > framework enforces it structurally, so correctness does not depend on the
 > handler author remembering to lock.
 
+#### ⚠️ Avoiding Deadlocks (critical)
+
+Because a message handler runs *inside* the Actor's `run` loop and that same loop
+is the **only** thing that can process this Actor's mailbox, a handler must never
+*block waiting on its own mailbox*. The most common deadlock is calling
+`Call` / `RefCall` **on the Actor itself** (directly, or indirectly through a chain
+of Actors that loops back to the caller):
+
+```
+handler for Actor X:
+    Call(X, &SomeReq{})   // pushes reply msg to X's mailbox, then blocks…
+                          // but X's mailbox is stuck behind the running handler
+                          // → the reply can never be processed → DEADLOCK
+```
+
+**Rules to avoid deadlocks**
+
+1. **Never `Call`/`RefCall` yourself.** Do not invoke a request handler on the
+   same Actor that is currently running the caller. Use `Post` (fire-and-forget)
+   plus an explicit reply message, or restructure the logic into a single handler
+   that mutates `ctx.State()` directly.
+2. **Beware cyclic `Call` chains.** If `A` calls `B`, and `B`'s handler calls
+   `C`, and `C` calls back `A` (or any cycle), all those Actors block on each
+   other's mailboxes and deadlock. Prefer `Post` for intra-Actor-graph
+   notifications so no participant blocks.
+3. **`Call`/`RefCall` must have a context deadline.** Always pass a `context` with
+   a timeout — `Call(ctx, …)` / `RefCall(ctx, …)`. Without a deadline, a crash or
+   slow downstream Actor turns a logic error into an indefinite hang rather than a
+   bounded error. A deadline returns promptly; it does not "fix" the deadlock but
+   prevents the caller goroutine from being stuck forever.
+4. **Don't block the event loop for long.** A handler that sleeps, does heavy
+   synchronous I/O, or waits on an external channel holds the Actor's single
+   goroutine, stalling *all* of that Actor's pending messages. Offload such work
+   via `ctx.Timer`, a separate goroutine that reports back with `Post`, or by
+   replying early.
+5. **`Post` is always safe.** `Post`/`RefPost` never block the caller and never
+   wait on a mailbox, so they cannot deadlock the sender. Reach for `Post` first;
+   use `Call` only for genuine request/reply where the target is a *different*,
+   independently-live Actor and a deadline is set.
+
+> Summary: deadlocks arise the moment a handler blocks on the *same* Actor's
+> mailbox (or on a cycle of mailboxes). Keep handlers non-blocking, prefer `Post`,
+> set deadlines on every `Call`, and never call yourself.
+
 ### Type Safety
 
 - **`Request[A, R]`**: `ReqType(A, *R) string` ensures compile-time `A`/`Q`/`R` match.
