@@ -136,7 +136,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			err, _ := r.(error)
 			a.logger.Warn("handler invoke panic recovered; replacing message in-place with recovery",
 				"id", a.id, "panic", r, "stack", string(stackbuf[:n]))
-			
+
 			// 结算 idle 计数（与正常路径对称：比较 prevIdle 与 nctx.idle 的跳变）。
 			if prevIdle && !nctx.idle {
 				a.g.actorWake(a.id)
@@ -145,7 +145,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			}
 			// 让被 panic 的原消息的 caller 及时拿到错误，不再阻塞。
 			buf[nx].Fail(&HandlerCallError{a.id, "", err})
-			
+
 			// 原地替换 buf[nx] 为 recovery 消息，保持队列顺序（后续消息仍在后面）：
 			//   - 注册了 PanicReq handler → 替换为 PanicReq invokable，交用户处理（落盘/Open/Quit）；
 			//   - 未注册 → 替换为安全占位 panicDropInvoke，actor 保持存活。
@@ -186,7 +186,26 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			// 由用户在回调中调用 Open / grain.State.Activate 翻转为 false。
 			nctx = newActorContext(a)
 		}
+		// 记录进入 invoke 前的 idle 状态（spawning 时此处必为 true，早于 OnSpawn，
+		// 以便 OnSpawn 内的 Open/Quit 能让 prevIdle 与最终 idle 的跳变被正确结算）。
 		prevIdle = nctx.idle
+		if spawning {
+			on_spawn := a.g.on_spawn
+			if on_spawn != nil {
+				err := on_spawn(nctx)
+				if err != nil {
+					// OnSpawn 初始化失败：丢弃本次创建，Actor 不进入 idle 池也不注册，
+					// ctx 直接 clear。随后 nctx==nil，本轮不会再调用 spawn handler，
+					// 当前 spawn 消息的 caller 会收到该错误。
+					nctx.clear()
+					nctx = nil
+					// 让当前 spawn 消息的 caller 收到初始化错误（避免永久阻塞）；
+					// 随后 continue 跳过 Invoke，避免对 nil ctx 解引用导致 panic。
+					m.Fail(err)
+					continue
+				}
+			}
+		}
 		m.Invoke(nctx, spawning) // 若 panic，被上面 defer 捕获：原地替换 buf[nx] 并保留 nctx
 		// 结算 idle 计数：Open/Quit 只翻 idle 标记，run loop 比较状态跳变。
 		// idle: true→false（Open）  ⇒ actorWake；false→true（Quit） ⇒ actorIdle。

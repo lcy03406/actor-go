@@ -49,7 +49,7 @@ func ServeWith[A ActorId, S any](mgr *Manager, bufMails int, builder *RegistryBu
 		panic("actor type already registered: " + actorType)
 	}
 
-	mgr.groups[actorType] = newGroup[A, S](mgr, builder.handlers, bufMails)
+	mgr.groups[actorType] = newGroup[A, S](mgr, builder.handlers, builder.on_spawn, bufMails)
 	mgr.logger.Info("serving actor type", "type", actorType, "bufMails", bufMails)
 }
 

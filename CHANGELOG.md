@@ -22,3 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Content 超时：Call 支持 context 超时和取消
 - 完善的测试覆盖：单元测试、并发测试、Benchmark 测试
 - 示例代码：cmd/example（本地 Actor）、cmd/rpc_example（RPC）、cmd/grain_example（持久化 Grain）
+- OnSpawn 钩子：`RegistryBuilder.SetOnSpawn` 支持在 Actor 首次创建（spawn 消息）时、
+  用户 spawn/serve handler 之前自动调用一次，用于初始化状态或资源
+
+### Fixed
+
+- 修复 OnSpawn 初始化失败时 `nctx` 为 `nil` 导致 `prevIdle = nctx.idle` 的空指针 panic，
+  并让 spawn 消息 caller 通过 `m.Fail(err)` 收到该错误而非永久阻塞
+- 修复 `prevIdle` 读取时机错误导致在 OnSpawn 内调用 `Open()` 无法使 Actor 保持活跃的问题
+  （idle 计数未被正确扣减，对外表现为 Actor 未创建，Count 为 0）

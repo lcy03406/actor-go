@@ -103,3 +103,21 @@ type PanicReq[A ActorId] struct {
 }
 
 func (*PanicReq[A]) ReqType(_ A, _ *Ok) string { return "__panic__" }
+
+// OnSpawnFn 是 OnSpawn 钩子类型：在每个 Actor 首次被创建（收到第一条 spawn 消息）时，
+// 在用户的 spawn/serve handler 之前被框架自动调用一次。
+//
+// 调用时机与约束：
+//   - 仅在 spawning=true（Actor 之前不存在）时触发；后续发往同一 Actor 的消息不会再次调用。
+//   - 调用时 Actor 尚未激活（ctx 处于 idle 态，idle=true），与 spawn handler 共享同一个 ctx，
+//     因此可在此安全地 SetState / 初始化资源。
+//   - 若在 OnSpawn 中调用 Open()，会把 Actor 标记为活跃，使 spawn handler 之后即使不 Open 也保持存活；
+//     若调用 Quit() 则相反，Actor 处理完当前消息后回到 idle 池。
+//
+// 错误处理：
+//   - 返回非 nil error 视为初始化失败：框架会丢弃本次创建（clear ctx，Actor 不进入 idle 池、
+//     也不注册到 manager），当前这条 spawn 消息的 caller 会收到该错误；
+//   - 返回 nil 视为成功，随后继续调用用户注册的 spawn/serve handler。
+//
+// 注意：OnSpawn 由框架托管，不要手动调用；它只会在首次创建路径上被调用。
+type OnSpawnFn[A ActorId, S anyState] = func(actor *ActorContext[A, S]) error

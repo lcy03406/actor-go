@@ -373,6 +373,39 @@ Both patterns are fully interoperable — you can mix `RegisterSpawn` and
 whether the handler logic feels more natural on the request struct itself
 or alongside other handlers in the registration block.
 
+### 2.1 OnSpawn Hook — Initialization on First Creation
+
+`SetOnSpawn` registers a hook that the framework calls **automatically, exactly once**,
+the first time an Actor is created (i.e. on the first — spawn — message that finds no
+existing Actor). It runs **before** your spawn/serve handler, on the same
+`ActorContext`, and is the ideal place to initialize state or acquire resources.
+
+```go
+actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+    b.SetOnSpawn(func(ctx *actor.ActorContext[PlayerId, PlayerState]) error {
+        // runs once, before the spawn handler
+        ctx.SetState(PlayerState{Health: 100})
+        return nil // return an error to abort creation
+    })
+    actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
+})
+```
+
+**Behavior & contract:**
+
+| Aspect | Detail |
+|--------|--------|
+| **When** | Only when `spawning == true` (Actor did not exist). Subsequent messages to the same Actor never call it again. |
+| **Order** | Runs *before* the user's spawn/serve handler, sharing the same `ActorContext`. |
+| **State at call** | The Actor is not yet active (idle). You may `SetState`, and calling `ctx.Open()` / `ctx.State().Activate(...)` inside `OnSpawn` keeps the Actor alive even if the spawn handler itself does not open it. |
+| **Return value** | `nil` → creation proceeds and the spawn handler runs. Non-`nil` error → the creation is aborted: the Actor is **not** created, the spawn message's caller receives that error, and `OnSpawn` will be retried on the next spawn attempt. |
+| **Not manual** | `OnSpawn` is framework-managed — never call it yourself. |
+
+> **Note on error propagation:** when `OnSpawn` returns an error, the caller of the
+> spawn message receives it (via `Call`/`Post`'s reply channel). `Post` returns `nil`
+> immediately upon enqueueing, so use `Call` (or check `actor.Count`) to observe the
+> failure.
+
 ### 3. Send Messages
 
 ```go
