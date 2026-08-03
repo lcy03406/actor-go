@@ -8,6 +8,8 @@
 
 > 基于 Go 泛型的类型安全 Actor 模型框架，提供 RPC 远程调用、分布式集群和持久化 Grain 生命周期管理。
 
+中文文档：[README.zh.md](README.zh.md)
+
 ## Quick Start
 
 ```bash

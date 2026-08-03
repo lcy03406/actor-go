@@ -2,6 +2,8 @@ package actor
 
 import "fmt"
 
+// GroupNotFoundError 表示目标 Actor 所属的 Group（ActorType）不存在。
+// 通常因为该 Actor 类型尚未通过 Manager.AddGroup 注册。
 type GroupNotFoundError struct {
 	Id ActorIdBase
 }
@@ -31,6 +33,8 @@ func (e *SpawnRefusedError) Error() string {
 	return fmt.Sprintf("spawn refused for %s: %s", e.Id, e.Reason)
 }
 
+// ActorClosedError 表示目标 Actor 已关闭（正在退出或已退出）。
+// 对已关闭 Actor 发送消息、获取引用或调用时返回该错误。
 type ActorClosedError struct {
 	Id ActorIdBase
 }
@@ -39,6 +43,8 @@ func (e *ActorClosedError) Error() string {
 	return fmt.Sprintf("actor closed: %s", e.Id)
 }
 
+// ActorBusyError 表示目标 Actor 正忙，暂时无法接受新的请求。
+// 多见于并发争用或上下文取消导致无法安全处理消息的场景。
 type ActorBusyError struct {
 	Id ActorIdBase
 }
@@ -47,6 +53,8 @@ func (e *ActorBusyError) Error() string {
 	return fmt.Sprintf("actor busy: %s", e.Id)
 }
 
+// HandlerNotFoundError 表示目标 Actor 上未注册对应请求类型的 handler。
+// Id 为 Actor ID，Req 为未找到的 reqType。
 type HandlerNotFoundError struct {
 	Id  ActorIdBase
 	Req string
@@ -56,6 +64,9 @@ func (e *HandlerNotFoundError) Error() string {
 	return fmt.Sprintf("handler not found: %s:%s", e.Id, e.Req)
 }
 
+// HandlerNotAllowedError 表示请求类型已注册，但当前阶段不允许处理该请求。
+// 例如：未注册为 spawn 的消息在 Actor 尚未创建（spawning=true）时到达，
+// 或未注册为 query 的消息在 Actor 已存在（spawning=false）时到达。
 type HandlerNotAllowedError struct {
 	Id  ActorIdBase
 	Req string

@@ -131,6 +131,12 @@ func waitResult[R PtrReply[R0], R0 any](ctx context.Context, ch <-chan result[R,
 	}
 }
 
+// SafeCall 向指定 Group 中的 Actor 发送请求并等待回复，回复类型 R 必须为 SafeReply
+// （即含 Close 方法的指针回复）。当 handler 成功返回、reply 正常送达调用方时，框架会在
+// 调用方读取完回复后自动 Close；但若 handler 返回 error，或调用方拿到 reply 后需继续
+// 持有（按业务暂存），则相应的临时 reply 仍需 handler 内部或调用方自行 Close；rctx 取消
+// 导致回复被丢弃时框架会尝试 Close。其类型推导与错误处理语义与 Call 一致，差别仅在于
+// 回复需支持可释放。详见 SafeReply 的注释。
 func SafeCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, id A, req Q) (R, error) {
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {

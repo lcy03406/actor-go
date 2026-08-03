@@ -1,10 +1,13 @@
 package actor
 
+// ActorType 是 Actor 的类型标识（等同于 Group 名），用于路由与注册查找。
 type ActorType string
 
+// ActorIdBase 是 ActorId 的最小接口，描述了任意 ActorId 必须提供的能力。
+// 仅用于在对 A 的具体类型无约束的上下文中（如错误对象、日志）传递 ID。
 type ActorIdBase interface {
-	ActorType() ActorType
-	String() string
+	ActorType() ActorType // 返回 Actor 的类型（等同于 Group 名）。
+	String() string       // 返回 Actor 的 ID 字符串，用于日志/调试。
 }
 
 // ActorId 是所有 Actor ID 必须实现的接口。
@@ -28,6 +31,20 @@ type PtrReply[R0 any] interface {
 	~*R0
 }
 
+// SafeReply 是"需显式释放"的回复类型约束，在 PtrReply 基础上额外要求实现 Close 方法。
+//
+// "安全"仅指一条自动释放通道：当 handler 成功返回 reply，且该 reply 正常送达调用方时，
+// 框架会在调用方读取完回复后自动调用 Close 释放资源。
+//
+// 除此之外的情况仍需调用方或 handler 自行负责释放，否则会泄漏：
+//   - 调用方拿到 reply 后若想继续持有（按业务需要暂存），则不应依赖框架自动 Close，
+//     应在用完该 reply 后自行调用 Close；
+//   - 若 handler 返回 error（而非 reply），框架不会自动 Close，临时创建的 reply
+//     必须由 handler 在返回错误前自行释放；
+//   - 若回复在传递途中被丢弃（如 context 取消），框架也会尝试 Close。
+//
+// SafeReply 仅用于 SafeCall / RefSafeCall 这两条安全回复路径；对应的普通路径
+// Call / RefCall 使用 PtrReply，不要求 Close。
 type SafeReply[R0 any] interface {
 	~*R0
 	Close()
@@ -43,6 +60,10 @@ type Request[A ActorId, R PtrReply[R0], Q0 any, R0 any] interface {
 	ReqType(A, R) string
 }
 
+// RequestHandler 是"类型安全 handler"版本的请求接口。
+// 在 Request 基础上额外要求实现 Handle 方法，使请求类型自身携带处理逻辑，
+// 从而可用 RegisterSpawnHandler / RegisterServeHandler 等以结构体方法注册 handler，
+// 无需单独编写闭包函数。A 限定 ActorId 类型，S 限定 State 类型，R 限定回复类型。
 type RequestHandler[A ActorId, S anyState, R PtrReply[R0], Q0 any, R0 any] interface {
 	~*Q0
 	ReqType(A, R) string

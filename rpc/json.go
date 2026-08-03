@@ -6,8 +6,11 @@ import (
 	"github.com/lcy03406/actor-go/actor"
 )
 
+// JsonServer 是基于 JSON 编码的 rpc.Server 便捷别名，直接可用而无需显式指定泛型参数。
 type JsonServer = Server[json.RawMessage, JsonCodec, JsonTransport]
+// JsonClient 是基于 JSON 编码的 rpc.Client 便捷别名，直接可用而无需显式指定泛型参数。
 type JsonClient = Client[json.RawMessage, JsonCodec, JsonTransport]
+// JsonRegBuilder 是基于 JSON 编码的 rpc.RegistryBuilder 便捷别名，用于 JSON 消息的注册。
 type JsonRegBuilder = RegistryBuilder[json.RawMessage, JsonCodec]
 
 type JsonCodec struct{}
