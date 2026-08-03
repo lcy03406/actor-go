@@ -27,7 +27,7 @@
 //	func (*CheckOwnership) ReqType(_ MyId, _ actor.OkReply) string { return "CheckOwnership" }
 //
 //	actor.RegisterServe(b, func(ctx *ActorCtx, req *CheckOwnership, _ bool) (actor.OkReply, error) {
-//	    if target, leave := cluster.ShouldOwn(placement, members, selfID, actorType, ctx.Id().String()); leave {
+//	    if !cluster.ShouldOwn(placement, members, selfID, actorType, ctx.Id().String()) {
 //	        if canDeactivate() {
 //	            ctx.State().Deactivate()
 //	        }

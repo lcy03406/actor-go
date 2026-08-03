@@ -15,7 +15,7 @@
 go get github.com/lcy03406/actor-go
 
 # Run examples
-go run ./cmd/example/        # local Actor
+go run ./cmd/actor_example/   # local Actor
 go run ./cmd/rpc_example/    # RPC over WebSocket
 go run ./cmd/grain_example/  # persistent Grain
 
@@ -28,9 +28,11 @@ go test ./...
 ```
 actor-go/
 ├── cmd/
-│   ├── example/              # local Actor example
-│   ├── rpc_example/          # RPC example
-│   └── grain_example/        # persistent Grain example
+│   ├── actor_example/        # local Actor example
+│   ├── rpc_example/          # RPC over WebSocket example
+│   ├── grain_example/        # persistent Grain example
+│   ├── cluster_example/      # cluster migration example
+│   └── engineering_example/  # throughput / stress examples
 ├── actor/                    # Actor core
 │   ├── types.go              # ActorId, Request interfaces
 │   ├── actor.go              # actorRuntime — single-threaded event loop
@@ -355,7 +357,7 @@ actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req 
     // ctx.Ref() looks up an existing Actor in the same Group — no spawn.
     roomRef := ctx.Ref(req.RoomId)
     if roomRef == nil {
-        return nil, ErrRoomNotFound
+        return nil, ErrRoomNotFound // 未找到：返回业务错误，ErrRoomNotFound 仅为示例
     }
     defer roomRef.Release() // release hold, allow Room to idle-exit later
 

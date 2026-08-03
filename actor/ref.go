@@ -15,6 +15,7 @@ import (
 //	// 在 handler 中获取对另一个 Actor 的引用
 //	ref := ctx.Ref(roomId)
 //	if ref == nil {
+//	    // 未找到：返回用户的业务错误（此处 ErrRoomNotFound 仅为示例）
 //	    return nil, ErrRoomNotFound
 //	}
 //	defer ref.Release() // 用完后释放，允许目标 idle 退出

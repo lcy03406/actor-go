@@ -86,11 +86,10 @@ type mongoDoc struct {
 	Snapshot   any       `bson:"inline"`
 }
 
-// Load 加载快照并获取租约，原子操作。
-//   - 文档不存在 → upsert 创建，设置 owner + generation=1，返回 ErrNotFound + LeaseInfo
-//   - owner 为空或租约已过期 → 抢占，generation+1，返回数据 + 新 LeaseInfo
+// Load 加载快照并获取租约，原子操作（upsert 语义，文档不存在时自动创建）。
+//   - owner 为空、租约已过期、或已被本节点持有 → 抢占/续租，generation+1，返回数据 + 新 LeaseInfo
+//     （首次激活时文档不存在，upsert 创建文档，generation 置 1）
 //   - 被其他节点持有且未过期 → 返回 ErrLeaseTaken（含持有者信息）
-//   - 已被本节点持有 → 幂等返回，续租
 func (d *MongoDriver) Load(ctx context.Context, actorType string, id string, owner string, dst any) (*LeaseInfo, error) {
 	col := d.col(actorType)
 	now := time.Now()

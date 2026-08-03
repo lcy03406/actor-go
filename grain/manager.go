@@ -56,7 +56,7 @@ func (pm *PersistenceManager) NodeId() string {
 }
 
 // ForceRelease 强制释放租约，不检查 owner 和 generation。
-// 实现 cluster.LeaseForceReleaser 接口，供 LeaseAwareRouter 使用。
+// 实现 cluster.LeaseForceReleaser 接口，供 cluster.Router 通过 WithForceReleaser 使用。
 func (pm *PersistenceManager) ForceRelease(ctx context.Context, actorType string, id string) (int64, error) {
 	if pm.driver == nil {
 		return 0, ErrNoDriver
