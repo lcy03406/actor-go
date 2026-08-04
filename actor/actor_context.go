@@ -20,6 +20,8 @@ func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorCon
 	return &ActorContext[A, S]{
 		ctrl: ActorControl{
 			ctx:    ctx,
+			logger: actor.logger,
+			mgr:    actor.g.mgr,
 			cancel: cancel,
 			timerFn: func(i *timerStub) func() {
 				return func() {
@@ -45,7 +47,7 @@ func (a *ActorContext[A, S]) Control() *ActorControl {
 }
 
 func (a *ActorContext[A, S]) Context() context.Context {
-	return a.ctrl.ctx
+	return a.ctrl.Context()
 }
 
 // Id 返回 Actor 的 ID。
@@ -65,7 +67,7 @@ func (a *ActorContext[A, S]) SetState(s S) {
 
 // Logger 返回 Actor 的日志记录器。
 func (a *ActorContext[A, S]) Logger() *slog.Logger {
-	return a.actor.logger
+	return a.ctrl.logger
 }
 
 // Manager 返回 Actor 系统顶层 Manager，用于跨 Group 的 Actor 通信。
@@ -77,7 +79,7 @@ func (a *ActorContext[A, S]) Logger() *slog.Logger {
 //	roomId := room.RoomId{RoomId: 123}
 //	actor.Post(ctx.Manager(), roomId, &room.JoinRoom{PlayerId: ctx.Id().String()})
 func (a *ActorContext[A, S]) Manager() *Manager {
-	return a.actor.g.mgr
+	return a.ctrl.mgr
 }
 
 // Quit 请求 Actor 退出：置 active=false（回到空闲态）。

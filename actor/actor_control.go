@@ -2,15 +2,18 @@ package actor
 
 import (
 	"context"
+	"log/slog"
 	"time"
 )
 
 type ActorControl struct {
 	ctx     context.Context
+	logger  *slog.Logger
+	mgr     *Manager
 	cancel  func()
 	timerFn func(i *timerStub) func()
-	active  bool // Actor 运行状态：true=激活，false=空闲。
-	// spawn 时默认为 true（不占用运行资源），由用户调用 Open 翻转为 false。
+	active  bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
+	OnQuit  func() //用户注册，退出时框架调用
 	timers  map[int]*time.Timer
 	timerId int
 }
@@ -25,10 +28,50 @@ func (a *ActorControl) clear() {
 	if a.cancel != nil {
 		a.cancel()
 	}
+	if a.OnQuit != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				a.logger.Error("OnQuit panic", "error", r)
+			}
+		}()
+		a.OnQuit()
+	}
 }
 
 func (a *ActorControl) Context() context.Context {
 	return a.ctx
+}
+
+// Logger 返回 Actor 的日志记录器。
+func (a *ActorControl) Logger() *slog.Logger {
+	return a.logger
+}
+
+// Manager 返回 Actor 系统顶层 Manager，用于跨 Group 的 Actor 通信。
+// 通过 Manager 可以向其他 Group 的 Actor 发送 Post/Call/Broadcast 消息。
+//
+// 示例：
+//
+//	// 在 Player handler 中向 Room Actor 发送消息
+//	roomId := room.RoomId{RoomId: 123}
+//	actor.Post(ctx.Manager(), roomId, &room.JoinRoom{PlayerId: ctx.Id().String()})
+func (a *ActorControl) Manager() *Manager {
+	return a.mgr
+}
+
+func (a *ActorControl) PushOnQuit(fn func()) {
+	if fn == nil {
+		return
+	}
+	old := a.OnQuit
+	if old == nil {
+		a.OnQuit = fn
+		return
+	}
+	a.OnQuit = func() {
+		fn()
+		old()
+	}
 }
 
 // Quit 请求 Actor 退出：置 active=false（回到空闲态）。
