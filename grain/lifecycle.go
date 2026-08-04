@@ -70,12 +70,10 @@ func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S,
 	id := ctx.Id()
 	actorType := string(id.ActorType())
 
-	var gen int64
-	if s.lease != nil {
-		gen = s.lease.Generation
-	}
-
-	if snap := s.toSnapshot(); snap != nil {
+	gen := s.lease.Generation
+	var t T
+	snap := t.TakeSnapshot(&s.Data)
+	if snap != nil {
 		if err := s.pm.driver.Save(ctx.Context(), actorType, id.String(), s.pm.nodeId, snap, gen); err != nil {
 			ctx.Logger().Error("grain deactivate: save failed", "id", id, "err", err)
 		} else {
@@ -111,22 +109,15 @@ func (s *State[A, D, S, T]) Persist(ctx *actor.ActorContext[A, State[A, D, S, T]
 		panic("grain: Persist called without PersistenceManager. " +
 			"Activate the Grain first via State.Activate(ctx, pm) in a spawn/serve handler.")
 	}
-	var gen int64
-	if s.lease != nil {
-		gen = s.lease.Generation
-	}
-	snap := s.toSnapshot()
+	gen := s.lease.Generation
+	var t T
+	snap := t.TakeSnapshot(&s.Data)
 	if snap == nil {
 		// 快照为 nil：本次不存盘（例如状态无变化），但仍续租以保活租约。
 		ctx.Logger().Debug("grain persist: snapshot nil, skip save but renew lease", "id", ctx.Id())
 		return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, nil, gen)
 	}
 	return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, snap, gen)
-}
-
-func (s *State[A, D, S, T]) toSnapshot() *S {
-	var t T
-	return t.TakeSnapshot(&s.Data)
 }
 
 // ─── 生命周期 ───
