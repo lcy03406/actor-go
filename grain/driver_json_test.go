@@ -2,6 +2,7 @@ package grain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -184,6 +185,59 @@ func TestJsonDriver_ForceRelease_NotFound(t *testing.T) {
 	}
 	if newGen != 1 {
 		t.Errorf("ForceRelease on not found: want 1, got %d", newGen)
+	}
+}
+
+func TestJsonDriver_SaveNilRenewLease(t *testing.T) {
+	dir := t.TempDir()
+	d := NewJsonDriver(dir)
+
+	// 先保存真实数据
+	snap := &TestGrainSnapshot{Value: 100}
+	if err := d.Save(context.Background(), "test", "actor-nil", "node-1", snap, 1); err != nil {
+		t.Fatalf("first save failed: %v", err)
+	}
+
+	// snapshot 返回 nil：本次不存盘，仅续租（更新 generation，保留 data）
+	if err := d.Save(context.Background(), "test", "actor-nil", "node-1", nil, 2); err != nil {
+		t.Fatalf("nil save (renew lease) failed: %v", err)
+	}
+
+	// data 应保留为 100，而非被清成 null
+	var loaded TestGrainSnapshot
+	if _, err := d.Load(context.Background(), "test", "actor-nil", "node-1", &loaded); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if loaded.Value != 100 {
+		t.Errorf("nil save must not overwrite data: want 100, got %d", loaded.Value)
+	}
+
+	// 文件中的 generation 应更新为 2
+	raw, err := os.ReadFile(filepath.Join(dir, "test", "actor-nil.json"))
+	if err != nil {
+		t.Fatalf("read file failed: %v", err)
+	}
+	type fileDoc struct {
+		Generation int64 `json:"generation"`
+	}
+	var doc fileDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if doc.Generation != 2 {
+		t.Errorf("nil save should renew generation: want 2, got %d", doc.Generation)
+	}
+
+	// 再次用 nil 续租（generation 不匹配旧值 1），应仍成功保留数据
+	if err := d.Save(context.Background(), "test", "actor-nil", "node-1", nil, 2); err != nil {
+		t.Fatalf("second nil save failed: %v", err)
+	}
+	var loaded2 TestGrainSnapshot
+	if _, err := d.Load(context.Background(), "test", "actor-nil", "node-1", &loaded2); err != nil {
+		t.Fatalf("load after second nil save failed: %v", err)
+	}
+	if loaded2.Value != 100 {
+		t.Errorf("second nil save must not overwrite data: want 100, got %d", loaded2.Value)
 	}
 }
 

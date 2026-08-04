@@ -108,6 +108,7 @@ func (d *RedisDriver) saveLua() string {
 		local gen = tonumber(ARGV[2])
 		local data = ARGV[3]
 		local ttl_ms = tonumber(ARGV[4])
+		local renew_only = tonumber(ARGV[5])
 
 		local cur_owner = redis.call('HGET', key, 'owner') or ''
 		local cur_gen = tonumber(redis.call('HGET', key, 'generation') or '0')
@@ -116,7 +117,12 @@ func (d *RedisDriver) saveLua() string {
 			return 0
 		end
 
-		redis.call('HSET', key, 'owner', owner, 'generation', gen, 'data', data)
+		-- renew_only=1 时仅续租，不覆盖 data 字段（snapshot 返回 nil 场景）
+		if renew_only ~= 1 then
+			redis.call('HSET', key, 'owner', owner, 'generation', gen, 'data', data)
+		else
+			redis.call('HSET', key, 'owner', owner, 'generation', gen)
+		end
 		if ttl_ms > 0 then
 			redis.call('PEXPIRE', key, ttl_ms)
 		end
@@ -183,12 +189,21 @@ func (d *RedisDriver) Load(ctx context.Context, actorType string, id string, own
 }
 
 // Save 保存快照并续租。
+// src 为 nil 时仅续租（更新 generation 与 TTL），不覆盖 data 字段，
+// 用于 snapshot 返回 nil 时"本次不存盘但仍保活租约"。
 func (d *RedisDriver) Save(ctx context.Context, actorType string, id string, owner string, src any, gen int64) error {
 	key := d.key(actorType, id)
 
-	data, err := d.marshalData(src)
-	if err != nil {
-		return err
+	var data []byte
+	renewOnly := 0
+	if src != nil {
+		var err error
+		data, err = d.marshalData(src)
+		if err != nil {
+			return err
+		}
+	} else {
+		renewOnly = 1
 	}
 
 	ttlMs := d.dataTTL.Milliseconds()
@@ -196,7 +211,7 @@ func (d *RedisDriver) Save(ctx context.Context, actorType string, id string, own
 		ttlMs = d.leaseTimeout.Milliseconds()
 	}
 
-	result, err := d.saveScript.Run(ctx, d.client, []string{key}, owner, gen, string(data), ttlMs).Int64()
+	result, err := d.saveScript.Run(ctx, d.client, []string{key}, owner, gen, string(data), ttlMs, renewOnly).Int64()
 	if err != nil {
 		return err
 	}

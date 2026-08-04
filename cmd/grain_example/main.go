@@ -76,20 +76,31 @@ func (*ForceSave) ReqType(_ PlayerId, _ *SaveReply) string { return "ForceSave" 
 
 func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 	actor.Serve(mgr, 100, func(b *RegBuilder) {
-		// 不再使用 WrapSpawn：用户在 spawn 回调中显式调用 State.Activate，
-		// 返回值表明数据是首次创建（ActivateCreated）还是从存储加载（ActivateLoaded）。
+		// 使用 SetupGrain 将生命周期托管给框架：
+		// OnSpawn 自动 Activate 并按 onActivate 回调初始化，
+		// OnQuit 自动 Persist + 释放租约，并按 WithAutoPersistInterval 定时存盘。
+		grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+			if created {
+				// 首次创建时初始化数据（initialized HP/Level 由 Login 传入）。
+				ctx.State().Data.HP = 100
+				ctx.State().Data.Level = 1
+				ctx.Logger().Info("grain created")
+			} else {
+				ctx.Logger().Info("grain loaded from disk")
+			}
+			return nil
+		})
+
+		// 注意：不再需要在 spawn/serve 中手动 Activate / Persist / Deactivate，
+		// 框架已通过 OnSpawn / OnQuit 自动管理。下面 handler 只关心业务。
 		actor.RegisterSpawn(b,
 			func(ctx *GrainCtx, req *Login, spawning bool) (actor.OkReply, error) {
-				res, err := ctx.State().Activate(ctx, pm)
-				if err != nil {
-					return actor.OK, err
-				}
-				if res == grain.ActivateCreated {
+				// 若首次创建，用 Login 参数覆盖默认初始化值。
+				if ctx.State().Data.HP == 0 {
 					ctx.State().Data.HP = req.InitHP
 					ctx.State().Data.Level = req.InitLevel
 				}
-				ctx.State().Persist(ctx) // save + renew lease
-				ctx.Logger().Info("grain login", "hp", ctx.State().Data.HP, "level", ctx.State().Data.Level, "created", res == grain.ActivateCreated)
+				ctx.Logger().Info("grain login", "hp", ctx.State().Data.HP, "level", ctx.State().Data.Level)
 				return actor.OK, nil
 			})
 
@@ -101,13 +112,13 @@ func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 		})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *SaveAndQuit, _ bool) (actor.OkReply, error) {
-			ctx.State().Deactivate(ctx) // save + release lease + quit
-			ctx.Logger().Info("grain deactivated")
+			ctx.Quit() // 触发 OnQuit 自动 Persist + 释放租约
+			ctx.Logger().Info("grain save and quit")
 			return actor.OK, nil
 		})
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *ForceSave, _ bool) (*SaveReply, error) {
-			ctx.State().Persist(ctx) // save + renew lease, without quitting
+			ctx.State().Persist(ctx) // 主动存盘 + 续租（可选，定时存盘已自动进行）
 			return &SaveReply{HP: ctx.State().Data.HP}, nil
 		})
 	})
@@ -119,10 +130,12 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	// Create PersistenceManager with JSON file driver
-	// Lease is now built into the driver, no separate lease.Manager needed
+	// Lease is now built into the driver, no separate lease.Manager needed.
+	// WithAutoPersistInterval 让框架每隔 5s 自动存盘续租。
 	pm := grain.NewPersistenceManager(
 		grain.WithDriver(grain.NewJsonDriver("./grain_data")),
 		grain.WithNodeId("node-1"),
+		grain.WithAutoPersistInterval(5*time.Second),
 	)
 
 	mgr := actor.NewManager()

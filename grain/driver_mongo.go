@@ -141,6 +141,8 @@ func (d *MongoDriver) Load(ctx context.Context, actorType string, id string, own
 
 // Save 保存快照并续租。
 // 通过 (id, owner, generation) 三元组校验，防止过期写入。
+// src 为 nil 时仅续租（更新 generation 与 updated_at），不覆盖 inline 快照字段，
+// 用于 snapshot 返回 nil 时"本次不存盘但仍保活租约"。
 func (d *MongoDriver) Save(ctx context.Context, actorType string, id string, owner string, src any, gen int64) error {
 	col := d.col(actorType)
 	now := time.Now()
@@ -149,6 +151,23 @@ func (d *MongoDriver) Save(ctx context.Context, actorType string, id string, own
 		"_id":        id,
 		"owner":      owner,
 		"generation": gen,
+	}
+
+	if src == nil {
+		update := bson.M{
+			"$set": bson.M{
+				"generation": gen,
+				"updated_at": now,
+			},
+		}
+		result, err := col.UpdateOne(ctx, filter, update)
+		if err != nil {
+			return err
+		}
+		if result.MatchedCount == 0 {
+			return errors.New("grain: save failed, lease expired or taken by another owner")
+		}
+		return nil
 	}
 
 	doc := mongoDoc{

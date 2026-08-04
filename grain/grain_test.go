@@ -2,7 +2,10 @@ package grain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -102,7 +105,10 @@ func activatingSpawn[Q any, R any](
 
 // setupManager 创建 manager 并按给定注册函数注册一组 grain handler，
 // 消除各测试中重复的 `actor.NewManager()` + `actor.Serve(...)` 包裹样板。
-func setupManager(pm *PersistenceManager, register func(b *actor.RegistryBuilder[TestGrainId, testState])) *actor.Manager {
+func setupManager[S any, P any, K Snapshotter[S, P]](
+	pm *PersistenceManager,
+	register func(b *actor.RegistryBuilder[TestGrainId, State[TestGrainId, S, P, K]]),
+) *actor.Manager {
 	mgr := actor.NewManager()
 	actor.Serve(mgr, 10, register)
 	return mgr
@@ -731,5 +737,267 @@ func TestPersistenceManager_Driver_NodeId(t *testing.T) {
 	}
 	if pm.NodeId() != "test-node" {
 		t.Errorf("NodeId(): want test-node, got %s", pm.NodeId())
+	}
+}
+
+// ─── SetupGrain 自动生命周期测试 ───
+
+// TestQuitReq 触发 Grain 主动退出（Quit），用于验证 OnQuit 自动存盘 + 释放。
+type TestQuitReq struct{}
+
+func (*TestQuitReq) ReqType(_ TestGrainId, _ actor.OkReply) string { return "test_quit" }
+
+// TestSetupGrain_AutoActivateAndQuitPersist 验证 SetupGrain 后：
+//   - 无需手动 Activate，OnSpawn 自动激活；
+//   - 修改数据后 Quit，OnQuit 自动 Persist + release；
+//   - 重新 spawn 数据已持久化。
+func TestSetupGrain_AutoActivateAndQuitPersist(t *testing.T) {
+	pm := newTestPMWithDir(t.TempDir())
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		SetupGrain(b, pm, nil)
+		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: ctx.State().Activated()}, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit() // 触发 OnQuit 自动存盘 + 释放
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *testActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "setup-auto"}
+	reply, err := actor.Call(ctx, mgr, id, &TestSpawnReq{})
+	if err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if !reply.Activated {
+		t.Fatal("expected grain auto-activated by OnSpawn")
+	}
+
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 123}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit failed: %v", err)
+	}
+	actor.JoinActor[TestGrainId](mgr, id)
+
+	// 重新 spawn：OnQuit 应已自动存盘，数据应恢复。
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("respawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 123 {
+		t.Errorf("OnQuit should auto-persist: want 123, got %d", q.Value)
+	}
+}
+
+// TestSetupGrain_OnActivateInit 验证 onActivate 回调的 created 标志：
+// 首次创建时 created=true 用于初始化，重新加载时 created=false。
+func TestSetupGrain_OnActivateInit(t *testing.T) {
+	pm := newTestPMWithDir(t.TempDir())
+	var initCount, loadedCount int
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		SetupGrain(b, pm, func(ctx *testActorCtx, created bool) error {
+			if created {
+				initCount++
+				ctx.State().Data.Value = 1000 // 首次创建初始化
+			} else {
+				loadedCount++
+			}
+			return nil
+		})
+		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit()
+			return actor.OK, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "setup-init"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn1 failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit1 failed: %v", err)
+	}
+	actor.JoinActor[TestGrainId](mgr, id)
+
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn2 failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit2 failed: %v", err)
+	}
+	actor.JoinActor[TestGrainId](mgr, id)
+
+	if initCount != 1 {
+		t.Errorf("onActivate created=true should fire once, got %d", initCount)
+	}
+	if loadedCount != 1 {
+		t.Errorf("onActivate created=false should fire once, got %d", loadedCount)
+	}
+}
+
+// TestSetupGrain_AutoPersistInterval 验证定时存盘：设置较短 interval，
+// 修改数据后等待超过一个 interval，框架应已自动 Persist 落盘。
+func TestSetupGrain_AutoPersistInterval(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("node-1"),
+		WithAutoPersistInterval(80*time.Millisecond),
+	)
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+		SetupGrain(b, pm, nil)
+		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *testActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit()
+			return actor.OK, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "setup-auto-ps"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 7}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+
+	// 等待至少两个定时存盘周期，确认自动落盘发生。
+	time.Sleep(250 * time.Millisecond)
+
+	// 直接读取磁盘文件，验证数据已被定时存盘写入（data.Value == 7）。
+	path := filepath.Join(dir, "test_grain", id.String()+".json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("auto persist did not write file: %v", err)
+	}
+	var doc struct {
+		Generation int64 `json:"generation"`
+		Data       struct {
+			Value int `json:"value"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode persisted file: %v", err)
+	}
+	if doc.Data.Value != 7 {
+		t.Errorf("auto persist should have saved Value=7, got %d", doc.Data.Value)
+	}
+
+	// 退出并清理。
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit failed: %v", err)
+	}
+	actor.JoinActor[TestGrainId](mgr, id)
+}
+
+// ─── nil snapshot 测试 ───
+
+// TestGrainNilSnapshotter 是一个会返回 nil 快照的 Snapshotter：
+// 用于验证 Persist 在 TakeSnapshot 返回 nil 时跳过落盘但不 panic。
+type TestGrainNilSnapshotter struct{}
+
+func (TestGrainNilSnapshotter) NewPersist(data *TestGrainData) *TestGrainSnapshot {
+	return &TestGrainSnapshot{}
+}
+func (TestGrainNilSnapshotter) LoadSnapshot(data *TestGrainData, snapshot *TestGrainSnapshot) {
+	if snapshot != nil {
+		data.Value = snapshot.Value
+	}
+}
+func (TestGrainNilSnapshotter) TakeSnapshot(data *TestGrainData) *TestGrainSnapshot {
+	return nil // 本次不存盘
+}
+
+type nilState = State[TestGrainId, TestGrainData, TestGrainSnapshot, TestGrainNilSnapshotter]
+type nilActorCtx = actor.ActorContext[TestGrainId, nilState]
+
+func TestNilSnapshot_PersistSkipsSave(t *testing.T) {
+	dir := t.TempDir()
+	pm := NewPersistenceManager(
+		WithDriver(NewJsonDriver(dir)),
+		WithNodeId("node-1"),
+	)
+	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, nilState]) {
+		SetupGrain(b, pm, func(ctx *nilActorCtx, created bool) error {
+			if created {
+				ctx.State().Data.Value = 555
+			}
+			return nil
+		})
+		actor.RegisterSpawn(b, func(ctx *nilActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			return &TestSpawnReply{Activated: ctx.State().Activated()}, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilActorCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilActorCtx, req *TestQuitReq, spawning bool) (actor.OkReply, error) {
+			ctx.Quit()
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *nilActorCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "nil-snap"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	// 触发一次 Persist（nil snapshot → 跳过落盘），不应 panic。
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 1}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
+		t.Fatalf("quit failed: %v", err)
+	}
+	actor.JoinActor[TestGrainId](mgr, id)
+
+	// 重新加载：由于 snapshot 始终为 nil，磁盘上不会保存 Data.Value，
+	// 但 onActivate 在 created=false 时沿用加载到的数据（零值）。
+	// 这里只验证流程不 panic 且能重新激活。
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("respawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	// 因为 Persist 总是跳过（nil），磁盘无 Value；重新加载得到零值。
+	if q.Value != 0 {
+		t.Errorf("nil snapshot should leave data unpersisted: want 0, got %d", q.Value)
 	}
 }

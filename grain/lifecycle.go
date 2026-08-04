@@ -75,19 +75,32 @@ func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S,
 		gen = s.lease.Generation
 	}
 
-	if err := s.pm.driver.Save(ctx.Context(), actorType, id.String(), s.pm.nodeId, s.toSnapshot(), gen); err != nil {
-		ctx.Logger().Error("grain deactivate: save failed", "id", id, "err", err)
+	if snap := s.toSnapshot(); snap != nil {
+		if err := s.pm.driver.Save(ctx.Context(), actorType, id.String(), s.pm.nodeId, snap, gen); err != nil {
+			ctx.Logger().Error("grain deactivate: save failed", "id", id, "err", err)
+		} else {
+			ctx.Logger().Info("grain deactivate: saved", "id", id)
+		}
 	} else {
-		ctx.Logger().Info("grain deactivate: saved", "id", id)
-	}
-
-	if s.lease != nil {
-		if err := s.pm.driver.Release(ctx.Context(), actorType, id.String(), s.pm.nodeId, gen); err != nil {
-			ctx.Logger().Warn("grain deactivate: release lease failed", "id", id, "err", err)
+		// 快照为 nil：跳过存盘（不写文件），但仍通过 Save 续租以保活租约。
+		if err := s.pm.driver.Save(ctx.Context(), actorType, id.String(), s.pm.nodeId, nil, gen); err != nil {
+			ctx.Logger().Error("grain deactivate: renew lease failed", "id", id, "err", err)
 		}
 	}
 
+	s.release(ctx, actorType)
 	ctx.Quit()
+}
+
+// release 释放租约（清空 owner），不写数据、不退出 Grain。
+// 供 Deactivate 与生命周期钩子（OnQuit）复用。
+func (s *State[A, D, S, T]) release(ctx *actor.ActorContext[A, State[A, D, S, T]], actorType string) {
+	if s.lease == nil {
+		return
+	}
+	if err := s.pm.driver.Release(ctx.Context(), actorType, ctx.Id().String(), s.pm.nodeId, s.lease.Generation); err != nil {
+		ctx.Logger().Warn("grain: release lease failed", "id", ctx.Id(), "err", err)
+	}
 }
 
 // Persist 主动保存 Data 并续租，不退出 Grain。
@@ -102,7 +115,13 @@ func (s *State[A, D, S, T]) Persist(ctx *actor.ActorContext[A, State[A, D, S, T]
 	if s.lease != nil {
 		gen = s.lease.Generation
 	}
-	return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, s.toSnapshot(), gen)
+	snap := s.toSnapshot()
+	if snap == nil {
+		// 快照为 nil：本次不存盘（例如状态无变化），但仍续租以保活租约。
+		ctx.Logger().Debug("grain persist: snapshot nil, skip save but renew lease", "id", ctx.Id())
+		return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, nil, gen)
+	}
+	return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, snap, gen)
 }
 
 func (s *State[A, D, S, T]) toSnapshot() *S {
@@ -141,9 +160,18 @@ func (s *State[A, D, S, T]) Activate(ctx *actor.ActorContext[A, State[A, D, S, T
 	return res, nil
 }
 
+// Activated 返回 Grain 是否已激活（已获取租约）。
+func (s *State[A, D, S, T]) Activated() bool {
+	return s.pm != nil && s.lease != nil
+}
+
 // activate 激活 Grain：通过 Driver.Load 原子完成"获取租约 + 加载快照"。
 // 返回数据是新建的还是加载的。
 func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.ActorContext[A, State[A, D, S, T]], pm *PersistenceManager) (ActivateResult, error) {
+	// 幂等：已激活（已持有 PersistenceManager）则直接返回，避免重复 Load 造成租约竞态。
+	if ctx.State().pm != nil {
+		return ActivateLoaded, nil
+	}
 	id := ctx.Id()
 	actorType := string(id.ActorType())
 

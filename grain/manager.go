@@ -1,6 +1,9 @@
 package grain
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // PersistenceManager 是 manager 级别的持久化管理器。
 // 每个 Manager 创建一个实例，所有 Grain 类型共享。
@@ -13,10 +16,12 @@ import "context"
 //	pm := grain.NewPersistenceManager(
 //	    grain.WithDriver(grain.NewJsonDriver("./data")),
 //	    grain.WithNodeId("node-1"),
+//	    grain.WithAutoPersistInterval(30*time.Second),
 //	)
 type PersistenceManager struct {
-	driver Driver
-	nodeId string
+	driver          Driver
+	nodeId          string
+	persistInterval time.Duration
 }
 
 // PersistenceManagerOption 是 PersistenceManager 的配置选项。
@@ -33,6 +38,15 @@ func WithDriver(d Driver) PersistenceManagerOption {
 func WithNodeId(id string) PersistenceManagerOption {
 	return func(pm *PersistenceManager) {
 		pm.nodeId = id
+	}
+}
+
+// WithAutoPersistInterval 设置自动定时存盘间隔。
+// 通过 grain.SetupGrain 接入生命周期后，Grain 会以该间隔自动 Persist（续租 + 落盘）。
+// 设为 0 或负数表示关闭自动存盘（默认），需由业务主动调用 Persist。
+func WithAutoPersistInterval(d time.Duration) PersistenceManagerOption {
+	return func(pm *PersistenceManager) {
+		pm.persistInterval = d
 	}
 }
 

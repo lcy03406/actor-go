@@ -116,6 +116,16 @@ func (d *JsonDriver) Save(_ context.Context, actorType string, id string, _ stri
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
+
+	// src 为 nil：仅续租（更新 generation），不覆盖已有 data 字段。
+	// 用于 snapshot 返回 nil 时"本次不存盘但仍保活租约"。
+	var data any = src
+	if src == nil {
+		if raw, err := d.readData(path); err == nil {
+			data = raw
+		}
+	}
+
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -129,7 +139,23 @@ func (d *JsonDriver) Save(_ context.Context, actorType string, id string, _ stri
 	}
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
-	return enc.Encode(doc{Generation: gen, Data: src})
+	return enc.Encode(doc{Generation: gen, Data: data})
+}
+
+// readData 读取已有文件中的 data 字段，用于 nil 续租时保留原数据。
+func (d *JsonDriver) readData(path string) (json.RawMessage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	var doc struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(f).Decode(&doc); err != nil {
+		return nil, err
+	}
+	return doc.Data, nil
 }
 
 func (d *JsonDriver) Release(_ context.Context, actorType string, id string, _ string, _ int64) error {

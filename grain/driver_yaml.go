@@ -2,6 +2,7 @@ package grain
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -54,6 +55,12 @@ func (d *YamlDriver) Save(_ context.Context, actorType string, id string, _ stri
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
+
+	// src 为 nil：仅续租（更新 generation），保留原 data 字段。
+	if src == nil {
+		return d.renewOnlyYaml(path, gen)
+	}
+
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -65,6 +72,63 @@ func (d *YamlDriver) Save(_ context.Context, actorType string, id string, _ stri
 		Data       any   `yaml:"data"`
 	}
 	return yaml.NewEncoder(f).Encode(doc{Generation: gen, Data: src})
+}
+
+// renewOnlyYaml 在 src 为 nil 时仅更新 generation 字段并续租，
+// 通过读取整棵 yaml.Node 文档树、原地修改 generation 子节点后整体重写，
+// 从而完整保留原 data 字段（含其类型结构）。
+func (d *YamlDriver) renewOnlyYaml(path string, gen int64) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// 文件不存在（首次激活前）：直接创建含 generation 的空文档。
+			return d.writeRenewDoc(path, gen, nil)
+		}
+		return err
+	}
+	var root yaml.Node
+	if err := yaml.NewDecoder(f).Decode(&root); err != nil {
+		_ = f.Close()
+		return err
+	}
+	_ = f.Close()
+
+	// root 可能是 DocumentNode 包裹的 MappingNode，定位到真正的 Mapping 节点。
+	mapping := &root
+	if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		mapping = root.Content[0]
+	}
+	if mapping.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			key := mapping.Content[i]
+			val := mapping.Content[i+1]
+			if key.Value == "generation" {
+				val.Value = fmt.Sprintf("%d", gen)
+				val.Tag = "!!int"
+			}
+		}
+	}
+
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	return yaml.NewEncoder(out).Encode(&root)
+}
+
+// writeRenewDoc 创建/重写仅含 generation 的续租文档。
+func (d *YamlDriver) writeRenewDoc(path string, gen int64, data *yaml.Node) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	type doc struct {
+		Generation int64      `yaml:"generation"`
+		Data       *yaml.Node `yaml:"data"`
+	}
+	return yaml.NewEncoder(f).Encode(doc{Generation: gen, Data: data})
 }
 
 func (d *YamlDriver) Release(_ context.Context, actorType string, id string, _ string, _ int64) error {
