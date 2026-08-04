@@ -128,7 +128,7 @@ MainLoop:
 }
 
 func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *ActorContext[A, S]) (nx int, nctx *ActorContext[A, S]) {
-	var prevIdle bool // 当前消息进入 invoke 前的 idle 状态，供 panic 恢复结算使用
+	var prevActive bool // 当前消息进入 invoke 前的 active 状态，供 panic 恢复结算使用
 	defer func() {
 		if r := recover(); r != nil {
 			stackbuf := make([]byte, 4096)
@@ -137,11 +137,11 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			a.logger.Warn("handler invoke panic recovered; replacing message in-place with recovery",
 				"id", a.id, "panic", r, "stack", string(stackbuf[:n]))
 
-			// 结算 idle 计数（与正常路径对称：比较 prevIdle 与 nctx.idle 的跳变）。
-			if prevIdle && !nctx.idle {
-				a.g.actorWake(a.id)
-			} else if !prevIdle && nctx.idle {
+			// 结算 idle 计数（与正常路径对称：比较 prevActive 与 nctx.ctrl.active 的跳变）。
+			if prevActive && !nctx.ctrl.active {
 				a.g.actorIdle(a.id)
+			} else if !prevActive && nctx.ctrl.active {
+				a.g.actorWake(a.id)
 			}
 			// 让被 panic 的原消息的 caller 及时拿到错误，不再阻塞。
 			buf[nx].Fail(&HandlerCallError{a.id, "", err})
@@ -169,9 +169,9 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 				a.logger.Warn("no panic recovery handler registered; actor keeps alive", "id", a.id)
 				buf[nx] = &panicDropInvoke[A, S]{err: err}
 			}
-			// 不销毁 actor：保留 nctx（含 state/timers/idle），原地替换的消息将在
-			// 本轮 for 循环继续被处理。recover 后 body 续跑到下方 if nctx.idle 分支，
-			// 已激活（idle=false）的 actor 不会 clear，保持活跃；未激活的 actor 回 idle 池，仍存活。
+			// 不销毁 actor：保留 nctx（含 state/timers/active），原地替换的消息将在
+			// 本轮 for 循环继续被处理。recover 后 body 续跑到下方 if !nctx.ctrl.active 分支，
+			// 已激活（active=true）的 actor 不会 clear，保持活跃；未激活的 actor 回 idle 池，仍存活。
 		}
 	}()
 	nctx = ctx
@@ -182,13 +182,13 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			continue
 		}
 		if spawning {
-			// 创建 ctx 且默认 idle=true（空闲/未激活），
-			// 由用户在回调中调用 Open / grain.State.Activate 翻转为 false。
+		// 创建 ctx 且默认 active=false（空闲/未激活），
+		// 由用户在回调中调用 Open / grain.State.Activate 翻转为 true。
 			nctx = newActorContext(a)
 		}
-		// 记录进入 invoke 前的 idle 状态（spawning 时此处必为 true，早于 OnSpawn，
-		// 以便 OnSpawn 内的 Open/Quit 能让 prevIdle 与最终 idle 的跳变被正确结算）。
-		prevIdle = nctx.idle
+		// 记录进入 invoke 前的 active 状态（spawning 时此处必为 false，早于 OnSpawn，
+		// 以便 OnSpawn 内的 Open/Quit 能让 prevActive 与最终 active 的跳变被正确结算）。
+		prevActive = nctx.ctrl.active
 		if spawning {
 			on_spawn := a.g.on_spawn
 			if on_spawn != nil {
@@ -207,16 +207,16 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			}
 		}
 		m.Invoke(nctx, spawning) // 若 panic，被上面 defer 捕获：原地替换 buf[nx] 并保留 nctx
-		// 结算 idle 计数：Open/Quit 只翻 idle 标记，run loop 比较状态跳变。
-		// idle: true→false（Open）  ⇒ actorWake；false→true（Quit） ⇒ actorIdle。
-		if prevIdle && !nctx.idle {
-			a.g.actorWake(a.id)
-		} else if !prevIdle && nctx.idle {
+		// 结算 idle 计数：Open/Quit 只翻 active 标记，run loop 比较状态跳变。
+		// active: false→true（Open） ⇒ actorWake；true→false（Quit） ⇒ actorIdle。
+		if prevActive && !nctx.ctrl.active {
 			a.g.actorIdle(a.id)
+		} else if !prevActive && nctx.ctrl.active {
+			a.g.actorWake(a.id)
 		}
-		// 退出条件统一为：本轮消息处理完处于空闲态（idle=true）。
+		// 退出条件统一为：本轮消息处理完处于空闲态（active=false）。
 		// 涵盖 spawn 未 Open、Open 后 Quit 等所有回到空闲池的场景。
-		if nctx.idle {
+		if !nctx.ctrl.active {
 			nctx.clear()
 			nctx = nil
 		}
