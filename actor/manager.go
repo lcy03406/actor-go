@@ -4,6 +4,7 @@ import (
 	"context"
 	"iter"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync/atomic"
 )
@@ -179,6 +180,16 @@ func Broadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 an
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) (int, error) {
 	return MulticastIter(mgr, slices.Values(ids), req)
+}
+
+// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func MulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids map[A]X, req Q) (int, error) {
+	return MulticastIter(mgr, maps.Keys(ids), req)
+}
+
+// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func MulticastValues[X comparable, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids map[X]A, req Q) (int, error) {
+	return MulticastIter(mgr, maps.Values(ids), req)
 }
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
