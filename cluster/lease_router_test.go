@@ -158,7 +158,7 @@ func TestRouter_CallNormal(t *testing.T) {
 		t.Skip("actor placed on remote, skipping test")
 	}
 
-	reply, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &LeasePing{Msg: "hello"})
+	reply, err := Call(ctx, router, id, &LeasePing{Msg: "hello"})
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestRouter_PostNormal(t *testing.T) {
 		t.Skip("actor placed on remote, skipping test")
 	}
 
-	err := Post[DummyMessage, DummyCodec, DummyTransport](router, id, &LeasePing{Msg: "fire-and-forget"})
+	err := Post(router, id, &LeasePing{Msg: "fire-and-forget"})
 	if err != nil {
 		t.Fatalf("Post failed: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestRouter_CallWithForceReleaser_Normal(t *testing.T) {
 		t.Skip("actor placed on remote, skipping test")
 	}
 
-	reply, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &LeasePing{Msg: "hello"})
+	reply, err := Call(ctx, router, id, &LeasePing{Msg: "hello"})
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestRouter_LeaseTakenTriggersForceRelease(t *testing.T) {
 		t.Skip("could not find locally-placed actor")
 	}
 
-	reply, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &LeasePing{Msg: "hello"})
+	reply, err := Call(ctx, router, id, &LeasePing{Msg: "hello"})
 	_ = reply
 	_ = err
 	if !releaser.forceReleaseCalled {
@@ -317,7 +317,7 @@ func TestRouter_LeaseRetryNoForceReleaser(t *testing.T) {
 		t.Skip("could not find locally-placed actor")
 	}
 
-	_, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &LeasePing{Msg: "hello"})
+	_, err := Call(ctx, router, id, &LeasePing{Msg: "hello"})
 	if err == nil {
 		t.Error("expected error when lease is taken and no forceReleaser")
 	}

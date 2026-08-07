@@ -180,7 +180,7 @@ func Broadcast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 			lastErr = err
 			continue
 		}
-		if err := rpc.Broadcast[M, C, T](client, req); err != nil {
+		if err := rpc.Broadcast(client, req); err != nil {
 			lastErr = err
 		}
 	}
@@ -235,7 +235,7 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 		if err != nil {
 			continue
 		}
-		if err := rpc.Multicast[M, C, T](client, g.ids, req); err != nil {
+		if err := rpc.Multicast(client, g.ids, req); err != nil {
 			continue
 		}
 		total += len(g.ids)
@@ -259,7 +259,7 @@ func postOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId
 	if err != nil {
 		return err
 	}
-	return rpc.Post[M, C, T](client, id, req)
+	return rpc.Post(client, id, req)
 }
 
 func callOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
@@ -277,7 +277,7 @@ func callOnce[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId
 		var zero R
 		return zero, err
 	}
-	return rpc.Call[M, C, T](ctx, client, id, req)
+	return rpc.Call(ctx, client, id, req)
 }
 
 func handleLeasePost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorId, Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](
@@ -362,7 +362,7 @@ func tryForwardPost[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.A
 		return err
 	}
 
-	if err := rpc.Post[M, C, T](client, id, req); err != nil {
+	if err := rpc.Post(client, id, req); err != nil {
 		r.RemoveClient(ownerNode.Addr)
 		return err
 	}
@@ -391,7 +391,7 @@ func tryForwardCall[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.A
 		return zero, false
 	}
 
-	reply, err := rpc.Call[M, C, T](ctx, client, id, req)
+	reply, err := rpc.Call(ctx, client, id, req)
 	if err != nil {
 		r.RemoveClient(ownerNode.Addr)
 		return zero, false

@@ -162,7 +162,7 @@ func TestLifecycle_ActivateDeactivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "grain-1"})
+	actor.JoinActor(mgr, TestGrainId{Name: "grain-1"})
 
 	// 重新激活，验证数据恢复
 	reply2, err := actor.Call(ctx, mgr, TestGrainId{Name: "grain-1"}, &TestSpawnReq{})
@@ -210,8 +210,8 @@ func TestLifecycle_Persist(t *testing.T) {
 		t.Fatalf("call failed: %v", err)
 	}
 
-	actor.CloseActor[TestGrainId](mgr, TestGrainId{Name: "persist-test"})
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "persist-test"})
+	actor.CloseActor(mgr, TestGrainId{Name: "persist-test"})
+	actor.JoinActor(mgr, TestGrainId{Name: "persist-test"})
 	testutil.Settle(200 * time.Millisecond)
 
 	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "persist-test"}, &TestSpawnReq{})
@@ -253,7 +253,7 @@ func TestLifecycle_MutateAndDeactivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, TestGrainId{Name: "m"})
+	actor.JoinActor(mgr, TestGrainId{Name: "m"})
 
 	_, err = actor.Call(ctx, mgr, TestGrainId{Name: "m"}, &TestSpawnReq{})
 	if err != nil {
@@ -405,7 +405,7 @@ func TestLifecycle_ReactivationAfterDeactivateAndReacquire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
@@ -491,7 +491,7 @@ func TestLifecycle_MultipleGrainsDeactivateReactivate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("deactivate %d failed: %v", i, err)
 		}
-		actor.JoinActor[TestGrainId](mgr, ids[i])
+		actor.JoinActor(mgr, ids[i])
 	}
 
 	for i := 0; i < grainCount; i++ {
@@ -570,7 +570,7 @@ func TestLifecycle_DeactivateSavesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
@@ -632,7 +632,7 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	_, err = actor.Call(ctx, mgr, id, &TestSpawnReq{})
 	if err != nil {
@@ -686,7 +686,7 @@ func TestPersistenceManager_ForceRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deactivate failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	// 通过 PersistenceManager 强制释放
 	newGen, err := pm.ForceRelease(ctx, "test_grain", id.String())
@@ -789,7 +789,7 @@ func TestSetupGrain_AutoActivateAndQuitPersist(t *testing.T) {
 	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
 		t.Fatalf("quit failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	// 重新 spawn：OnQuit 应已自动存盘，数据应恢复。
 	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
@@ -838,7 +838,7 @@ func TestSetupGrain_OnActivateInit(t *testing.T) {
 	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
 		t.Fatalf("quit1 failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
 		t.Fatalf("spawn2 failed: %v", err)
@@ -846,7 +846,7 @@ func TestSetupGrain_OnActivateInit(t *testing.T) {
 	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
 		t.Fatalf("quit2 failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	if initCount != 1 {
 		t.Errorf("onActivate created=true should fire once, got %d", initCount)
@@ -917,7 +917,7 @@ func TestSetupGrain_AutoPersistInterval(t *testing.T) {
 	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
 		t.Fatalf("quit failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 }
 
 // ─── nil snapshot 测试 ───
@@ -984,7 +984,7 @@ func TestNilSnapshot_PersistSkipsSave(t *testing.T) {
 	if _, err := actor.Call(ctx, mgr, id, &TestQuitReq{}); err != nil {
 		t.Fatalf("quit failed: %v", err)
 	}
-	actor.JoinActor[TestGrainId](mgr, id)
+	actor.JoinActor(mgr, id)
 
 	// 重新加载：由于 snapshot 始终为 nil，磁盘上不会保存 Data.Value，
 	// 但 onActivate 在 created=false 时沿用加载到的数据（零值）。

@@ -11,11 +11,6 @@ type result[R PtrReply[R0], R0 any] struct {
 	Err error
 }
 
-func errorResult[R PtrReply[R0], R0 any](err error) (res result[R, R0]) {
-	res.Err = err
-	return
-}
-
 type invoke[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
 	h     *handlerEntry[A, S, Q, R, Q0, R0]
 	req   Q
@@ -65,6 +60,6 @@ type panicDropInvoke[A ActorId, S anyState] struct {
 	err error
 }
 
-func (p *panicDropInvoke[A, S]) Allow(_ A, _ bool) bool          { return true }
+func (p *panicDropInvoke[A, S]) Allow(_ A, _ bool) bool               { return true }
 func (p *panicDropInvoke[A, S]) Invoke(_ *ActorContext[A, S], _ bool) {}
-func (p *panicDropInvoke[A, S]) Fail(_ error)                    {}
+func (p *panicDropInvoke[A, S]) Fail(_ error)                         {}

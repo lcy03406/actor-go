@@ -1,5 +1,7 @@
 package actor
 
+import "iter"
+
 type handlerFunc[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] func(actor *ActorContext[A, S], req Q, spawning bool) (R, error)
 
 // handler 是擦除具体请求/回复类型的 handler 接口。
@@ -12,7 +14,7 @@ type handlerBase[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 
 	handlerCall(gb groupBase[A], id A, req Q, recoverFn func(R)) (chan result[R, R0], error)
 	handlerPost(gb groupBase[A], id A, req Q) error
 	handlerBroadcast(gb groupBase[A], req Q) (int, error)
-	handlerMulticast(gb groupBase[A], ids []A, req Q) (int, error)
+	handlerMulticast(gb groupBase[A], ids iter.Seq[A], req Q) (int, error)
 }
 
 type handlerEntry[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
@@ -82,7 +84,7 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerBroadcast(gb groupBase[A], req
 	return g.broadcast(i)
 }
 
-func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerMulticast(gb groupBase[A], ids []A, req Q) (int, error) {
+func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerMulticast(gb groupBase[A], ids iter.Seq[A], req Q) (int, error) {
 	g := gb.(*group[A, S])
 	i := &invoke[A, S, Q, R, Q0, R0]{
 		h:   h,

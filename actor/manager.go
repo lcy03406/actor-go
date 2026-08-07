@@ -2,7 +2,9 @@ package actor
 
 import (
 	"context"
+	"iter"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 )
 
@@ -49,7 +51,7 @@ func ServeWith[A ActorId, S any](mgr *Manager, bufMails int, builder *RegistryBu
 		panic("actor type already registered: " + actorType)
 	}
 
-	mgr.groups[actorType] = newGroup[A, S](mgr, builder.handlers, builder.on_spawn, bufMails)
+	mgr.groups[actorType] = newGroup(mgr, builder.handlers, builder.on_spawn, bufMails)
 	mgr.logger.Info("serving actor type", "type", actorType, "bufMails", bufMails)
 }
 
@@ -176,10 +178,12 @@ func Broadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 an
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) (int, error) {
-	if len(ids) <= 0 {
-		return 0, nil
-	}
-	id0 := ids[0]
+	return MulticastIter(mgr, slices.Values(ids), req)
+}
+
+// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func MulticastIter[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids iter.Seq[A], req Q) (int, error) {
+	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {
 		return 0, &GroupNotFoundError{id0}

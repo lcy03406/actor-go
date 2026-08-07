@@ -121,7 +121,7 @@ func TestRouter_LocalCall(t *testing.T) {
 		t.Skip("actor placed on remote, skipping local test (depends on hash)")
 	}
 
-	reply, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &Ping{Msg: "hello"})
+	reply, err := Call(ctx, router, id, &Ping{Msg: "hello"})
 	if err != nil {
 		t.Fatalf("local Call failed: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRouter_LocalPost(t *testing.T) {
 		t.Skip("actor placed on remote, skipping post test")
 	}
 
-	err := Post[DummyMessage, DummyCodec, DummyTransport](router, id, &Ping{Msg: "fire-and-forget"})
+	err := Post(router, id, &Ping{Msg: "fire-and-forget"})
 	if err != nil {
 		t.Fatalf("local Post failed: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 		_, _ = actor.Call(context.Background(), mgr, TestActorId{Name: "bc-" + fmt.Sprint(i)}, &Ping{Msg: "init"})
 	}
 
-	err := Broadcast[DummyMessage, DummyCodec, DummyTransport, TestActorId](router, &Ping{Msg: "broadcast"})
+	err := Broadcast(router, &Ping{Msg: "broadcast"})
 	if err != nil {
 		t.Fatalf("Broadcast failed: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestRouter_LocalMulticast(t *testing.T) {
 		_, _ = actor.Call(context.Background(), mgr, id, &Ping{Msg: "init"})
 	}
 
-	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, ids, &Ping{Msg: "multicast"})
+	n, err := Multicast(router, ids, &Ping{Msg: "multicast"})
 	if err != nil {
 		t.Fatalf("Multicast failed: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestRouter_Call_RemoteUnreachable(t *testing.T) {
 			continue
 		}
 		found = true
-		_, err := Call[DummyMessage, DummyCodec, DummyTransport](ctx, router, id, &Ping{Msg: "hello"})
+		_, err := Call(ctx, router, id, &Ping{Msg: "hello"})
 		if err == nil {
 			t.Error("Call to remote: expected error")
 		}
@@ -406,7 +406,7 @@ func TestRouter_Post_RemoteUnreachable(t *testing.T) {
 		t.Skip("actor placed on local node, skipping remote test")
 	}
 
-	err := Post[DummyMessage, DummyCodec, DummyTransport](router, id, &Ping{Msg: "hello"})
+	err := Post(router, id, &Ping{Msg: "hello"})
 	if err == nil {
 		t.Error("Post to remote: expected error")
 	}
@@ -417,7 +417,7 @@ func TestRouter_Post_RemoteUnreachable(t *testing.T) {
 func TestRouter_Multicast_Empty(t *testing.T) {
 	router := newRouter()
 
-	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, []TestActorId{}, &Ping{Msg: "empty"})
+	n, err := Multicast(router, []TestActorId{}, &Ping{Msg: "empty"})
 	if err != nil {
 		t.Fatalf("Multicast empty: expected no error, got %v", err)
 	}
@@ -446,7 +446,7 @@ func TestRouter_Multicast_AllRemote(t *testing.T) {
 		t.Skip("not enough remote-placed actors for test")
 	}
 
-	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, remoteIds, &Ping{Msg: "all-remote"})
+	n, err := Multicast(router, remoteIds, &Ping{Msg: "all-remote"})
 	if n < 0 || n > len(remoteIds) {
 		t.Errorf("Multicast all-remote: unexpected count %d (expected 0-%d)", n, len(remoteIds))
 	}
@@ -476,7 +476,7 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	n, err := Multicast[DummyMessage, DummyCodec, DummyTransport](router, ids, &Ping{Msg: "mixed"})
+	n, err := Multicast(router, ids, &Ping{Msg: "mixed"})
 	if n < 0 {
 		t.Errorf("Multicast mixed: unexpected negative count %d", n)
 	}
