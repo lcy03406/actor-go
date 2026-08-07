@@ -15,17 +15,17 @@ type Snapshotter[D any, P any] interface {
 // 即整份数据直接作为快照保存与加载，不做任何转换。适用于无需裁剪/转换的简单场景。
 type ShotSelf[D any] struct{}
 
-func (s *ShotSelf[D]) NewPersist(data *D) *D {
+func (s ShotSelf[D]) NewPersist(data *D) *D {
 	return data
 }
 
-func (s *ShotSelf[D]) LoadSnapshot(data *D, persist *D) {
+func (s ShotSelf[D]) LoadSnapshot(data *D, persist *D) {
 	if persist == nil || persist == data {
 		return
 	}
 	*data = *persist
 }
 
-func (s *ShotSelf[D]) TakeSnapshot(data *D) *D {
+func (s ShotSelf[D]) TakeSnapshot(data *D) *D {
 	return data
 }
