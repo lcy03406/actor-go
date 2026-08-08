@@ -121,3 +121,6 @@ func (*PanicReq[A]) ReqType(_ A, _ *Ok) string { return "__panic__" }
 //
 // 注意：OnSpawn 由框架托管，不要手动调用；它只会在首次创建路径上被调用。
 type OnSpawnFn[A ActorId, S anyState] = func(actor *ActorContext[A, S]) error
+
+// TimerId 代表一个定时器。在Actor实例内部唯一。
+type TimerId int

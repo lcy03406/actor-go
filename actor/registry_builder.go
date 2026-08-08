@@ -26,7 +26,7 @@ func register[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0
 	allow_spawn, allow_query bool,
 	fn handlerFunc[A, S, Q, R, Q0, R0],
 ) {
-	reqType := reqTypeOf[A, Q, R]()
+	reqType := reqTypeOf[A, Q]()
 	b.handlers[reqType] = &handlerEntry[A, S, Q, R, Q0, R0]{
 		reqType:     reqType,
 		allow_spawn: allow_spawn,

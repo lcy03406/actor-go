@@ -145,11 +145,11 @@ func (ct *ContextTimer) Stop() {
 }
 
 // Timer 在指定延迟后向 Actor 自身发送回调，返回可取消的 Timer Id。
-func (a *ActorContext[A, S]) Timer(d time.Duration, fn func()) int {
+func (a *ActorContext[A, S]) Timer(d time.Duration, fn func()) TimerId {
 	return a.ctrl.Timer(d, fn)
 }
 
 // StopTimer 取消定时器，返回true表示成功取消，false表示已经触发了或ID不存在
-func (a *ActorContext[A, S]) StopTimer(timerId int) bool {
+func (a *ActorContext[A, S]) StopTimer(timerId TimerId) bool {
 	return a.ctrl.StopTimer(timerId)
 }

@@ -3,6 +3,7 @@ package actor
 import (
 	"context"
 	"log/slog"
+	"math"
 	"time"
 )
 
@@ -14,8 +15,8 @@ type ActorControl struct {
 	timerFn func(i *timerStub) func()
 	active  bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
 	OnQuit  func() //用户注册，退出时框架调用
-	timers  map[int]*time.Timer
-	timerId int
+	timers  map[TimerId]*time.Timer
+	timerId TimerId
 }
 
 func (a *ActorControl) clear() {
@@ -103,21 +104,32 @@ func (a *ActorControl) Open() {
 }
 
 // Timer 在指定延迟后向 Actor 自身发送回调，返回可取消的 Timer Id。
-func (a *ActorControl) Timer(d time.Duration, fn func()) int {
-	a.timerId++
-	id := a.timerId
+func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
+	id := a.timerId + 1
+	for id != a.timerId {
+		_, ok := a.timers[id]
+		if ok {
+			a.timerId = id
+			break
+		}
+		if id == math.MaxInt {
+			id = 1
+		} else {
+			id++
+		}
+	}
 	i := &timerStub{fn, id, nil}
 	timer := time.AfterFunc(d, a.timerFn(i))
 	i.t = timer
 	if a.timers == nil {
-		a.timers = make(map[int]*time.Timer)
+		a.timers = make(map[TimerId]*time.Timer)
 	}
 	a.timers[id] = timer
 	return id
 }
 
 // StopTimer 取消定时器，返回true表示成功取消，false表示已经触发了或ID不存在
-func (a *ActorControl) StopTimer(timerId int) bool {
+func (a *ActorControl) StopTimer(timerId TimerId) bool {
 	if a.timers == nil {
 		return false
 	}

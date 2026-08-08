@@ -4,7 +4,7 @@ import "time"
 
 type timerStub struct {
 	fn func()
-	id int
+	id TimerId
 	t  *time.Timer
 }
 
