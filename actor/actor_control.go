@@ -108,7 +108,7 @@ func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
 	id := a.timerId + 1
 	for id != a.timerId {
 		_, ok := a.timers[id]
-		if ok {
+		if !ok {
 			a.timerId = id
 			break
 		}
