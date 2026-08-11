@@ -108,6 +108,7 @@ func (d *MongoDriver) Load(ctx context.Context, actorType string, id string, own
 	// 使用聚合管道更新，确保与 Redis/JSON driver 语义一致：
 	// 仅当发生"抢占/首次"（owner 由空变我、由他人变我、或租约过期）时 generation +1；
 	// 同一 owner 幂等续租时 generation 保持不变。
+	// upsert=true：文档不存在时一次性原子创建空壳（owner=我、generation=1、不含 snapshot）。
 	update := mongo.Pipeline{
 		{bson.E{Key: "$set", Value: bson.M{
 			"owner":      owner,
@@ -125,59 +126,42 @@ func (d *MongoDriver) Load(ctx context.Context, actorType string, id string, own
 	}
 
 	opts := options.FindOneAndUpdate().
-		SetReturnDocument(options.After)
+		SetReturnDocument(options.After).
+		SetUpsert(true)
 
-	var doc mongoDoc
-	doc.Snapshot = dst
+	// 用 bson.Raw 接收 snapshot，以便区分"字段缺失（首次激活）"与"已有快照"，
+	// 避免把零值写进库、也避免把零值误读回调用方。
+	var doc struct {
+		ID         string    `bson:"_id"`
+		Owner      string    `bson:"owner"`
+		Generation int64     `bson:"generation"`
+		UpdatedAt  time.Time `bson:"updated_at"`
+		Snapshot   bson.Raw  `bson:"snapshot"`
+	}
 	err := col.FindOneAndUpdate(ctx, filter, update, opts).Decode(&doc)
-	if err == mongo.ErrNoDocuments {
-		// 文档不存在 或 被其他节点持有且未过期。读取以区分。
-		var existing mongoDoc
-		findErr := col.FindOne(ctx, bson.M{"_id": id}).Decode(&existing)
-		if findErr == mongo.ErrNoDocuments {
-			// 不存在 → 首次激活，upsert 创建文档（generation 置 1）。
-			createUpdate := bson.M{
-				"$set": bson.M{
-					"owner":      owner,
-					"updated_at": now,
-					"generation": 1,
-				},
-				"$setOnInsert": bson.M{
-					"_id":     id,
-					"snapshot": dst,
-				},
-			}
-			createOpts := options.FindOneAndUpdate().
-				SetReturnDocument(options.After).
-				SetUpsert(true)
-			var created mongoDoc
-			if cErr := col.FindOneAndUpdate(ctx, bson.M{"_id": id}, createUpdate, createOpts).Decode(&created); cErr != nil {
-				return nil, cErr
-			}
-			// 首次激活：返回 ErrNotFound，但租约已获取。
-			return &LeaseInfo{Key: id, Owner: created.Owner, Generation: created.Generation}, ErrNotFound
+	if err != nil {
+		// 被其他节点持有且未过期时，filter 不匹配但 _id 已存在，upsert 会触发 _id 重复键冲突。
+		// 捕获后读取当前文档，返回 ErrLeaseTaken（单一写入点仍是上面的原子 upsert，无 TOCTOU）。
+		if !mongo.IsDuplicateKeyError(err) {
+			return nil, err
 		}
-		if findErr != nil {
+		var existing mongoDoc
+		if findErr := col.FindOne(ctx, bson.M{"_id": id}).Decode(&existing); findErr != nil {
 			return nil, findErr
 		}
-		// 文档存在但被其他节点持有且未过期 → 返回 ErrLeaseTaken。
 		return nil, &ErrLeaseTaken{
 			Key:        id,
 			Owner:      existing.Owner,
 			Generation: existing.Generation,
 		}
 	}
-	if err != nil {
-		return nil, err
-	}
 
-	// 更新后 owner 不匹配 → 租约被他人持有（理论不会发生，因 filter 已限定 owner）
-	if doc.Owner != owner {
-		return nil, &ErrLeaseTaken{
-			Key:        id,
-			Owner:      doc.Owner,
-			Generation: doc.Generation,
-		}
+	// 首次激活：upsert 创建了空壳文档，snapshot 字段缺失 → 返回 ErrNotFound。
+	if len(doc.Snapshot) == 0 {
+		return &LeaseInfo{Key: id, Owner: doc.Owner, Generation: doc.Generation}, ErrNotFound
+	}
+	if err := bson.Unmarshal(doc.Snapshot, dst); err != nil {
+		return nil, err
 	}
 
 	lease := &LeaseInfo{Key: id, Owner: doc.Owner, Generation: doc.Generation}
