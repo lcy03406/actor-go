@@ -1,10 +1,10 @@
 // attack.go 定义 ControlAttack：玩家主动发起攻击的意图入口（Control* = 玩家控制）。
 //
 // 跨 Actor 链路（避免死锁与 TOCTOU）：
-//   1. Player(攻击方) ——actor.Post——▶ Player(被攻击方).PlayerDamage
-//   2. 被攻击方在自身 actor 内原子校验并扣血；
-//   3. 被攻击方 ——actor.Post——▶ 攻击方.PlayerCombatResult（回传结果）
-//   4. 攻击方收到回传后，结算金币 / 经验（见 combat_result.go）
+//  1. Player(攻击方) ——actor.Post——▶ Player(被攻击方).PlayerDamage
+//  2. 被攻击方在自身 actor 内原子校验并扣血；
+//  3. 被攻击方 ——actor.Post——▶ 攻击方.PlayerCombatResult（回传结果）
+//  4. 攻击方收到回传后，结算金币 / 经验（见 combat_result.go）
 //
 // ControlAttack 本身只负责「校验参数 + post 伤害事件」，不发奖、不读写对方状态。
 // 全程 actor.Post（fire-and-forget），无 actor.Call 嵌套等待，避免死锁。

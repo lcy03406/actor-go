@@ -33,6 +33,8 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Allow(id A, spawning bool) bool {
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning bool) {
+	traceRecv := actor.actor.g.options.TraceRecv
+	traceLog(traceRecv, actor.Logger(), "recv", nil, i.req)
 	rep, err := i.h.fn(actor, i.req, spawning)
 	if i.ch != nil {
 		if rep != nil && i.clean != nil {
@@ -42,6 +44,7 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning 
 				}
 			}()
 		}
+		traceLog(traceRecv, actor.Logger(), "reply", nil, rep)
 		i.ch <- result[R, R0]{rep, err}
 	}
 }

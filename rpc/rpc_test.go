@@ -74,7 +74,7 @@ func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 	t.Helper()
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
 			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
@@ -201,7 +201,7 @@ func TestRPCCall(t *testing.T) {
 func TestRPCCallSpawn(t *testing.T) {
 	// 使用带 RequestSpawn 的服务端
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterServe(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLoginWithReply, spawning bool) (*TestRpcAddReply, error) {
 			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})
@@ -262,7 +262,7 @@ func TestRPCCallTimeout(t *testing.T) {
 func TestRPCCallTimeoutExceeded(t *testing.T) {
 	// 使用带延迟 handler 的服务端
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
 			a.Open() // spawn 后保持活跃（框架不再自动激活）
 			a.SetState(TestRpcState{Value: req.Init})

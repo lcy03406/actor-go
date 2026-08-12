@@ -177,6 +177,7 @@ func TestRebalance_ScaleInOwnership(t *testing.T) {
 }
 
 // ─── 测试：CheckOwnership handler 用户业务逻辑 ───
+var options10 = actor.Options{BufMails: 10}
 
 func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 	// 模拟 CheckOwnership handler 中的用户业务逻辑：
@@ -196,7 +197,7 @@ func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 	var deactivateCount int32
 
 	// 注册 CheckOwnership handler
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			selfID := "node-1"
@@ -244,7 +245,7 @@ func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 
 	// 模拟集群变化 → 广播 CheckOwnership
 	// 实际中由 MigrationCoordinator 触发
-	_, err := actor.Broadcast[MigPlayerId](mgr, &MigCheckOwnership{})
+	_, err := actor.Broadcast(mgr, &MigCheckOwnership{})
 	if err != nil {
 		t.Logf("Broadcast CheckOwnership: %v (may fail if no actors matched)", err)
 	}
@@ -265,7 +266,7 @@ func TestMigrationCoordinator_Basic(t *testing.T) {
 	defer mgr.CloseManager()
 
 	// 注册 Player Group 的 CheckOwnership
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
@@ -282,7 +283,7 @@ func TestMigrationCoordinator_Basic(t *testing.T) {
 	notifyCalled := 0
 	coord.RegisterNotify(func() {
 		notifyCalled++
-		actor.Broadcast[MigPlayerId](mgr, &MigCheckOwnership{})
+		actor.Broadcast(mgr, &MigCheckOwnership{})
 	})
 
 	events := make(chan cluster.MemberEvent, 10)
@@ -332,7 +333,7 @@ func TestMigrationCoordinator_MemberLeft(t *testing.T) {
 
 	var checkOwnershipCalled int32
 
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			atomic.AddInt32(&checkOwnershipCalled, 1)
@@ -348,7 +349,7 @@ func TestMigrationCoordinator_MemberLeft(t *testing.T) {
 	var notifyCalled int32
 	coord.RegisterNotify(func() {
 		atomic.AddInt32(&notifyCalled, 1)
-		actor.Broadcast[MigPlayerId](mgr, &MigCheckOwnership{})
+		actor.Broadcast(mgr, &MigCheckOwnership{})
 	})
 
 	events := make(chan cluster.MemberEvent, 10)
@@ -402,7 +403,7 @@ func TestMigrationCoordinator_DynamicMembership(t *testing.T) {
 	var ownershipResults []string
 	var mu sync.Mutex
 
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
@@ -419,7 +420,7 @@ func TestMigrationCoordinator_DynamicMembership(t *testing.T) {
 
 	coord := cluster.NewMigrationCoordinator(mgr, placement, membership)
 	coord.RegisterNotify(func() {
-		actor.Broadcast[MigPlayerId](mgr, &MigCheckOwnership{})
+		actor.Broadcast(mgr, &MigCheckOwnership{})
 	})
 
 	events := make(chan cluster.MemberEvent, 10)
@@ -764,7 +765,7 @@ func TestMigrationCoordinator_HeterogeneousPlacement(t *testing.T) {
 	var checkResults []string
 	var mu sync.Mutex
 
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigCheckOwnership, _ bool) (actor.OkReply, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			members := membership.Members()
@@ -780,7 +781,7 @@ func TestMigrationCoordinator_HeterogeneousPlacement(t *testing.T) {
 
 	coord := cluster.NewMigrationCoordinator(mgr, placement, membership)
 	coord.RegisterNotify(func() {
-		actor.Broadcast[MigPlayerId](mgr, &MigCheckOwnership{})
+		actor.Broadcast(mgr, &MigCheckOwnership{})
 	})
 
 	events := make(chan cluster.MemberEvent, 10)
@@ -836,7 +837,7 @@ func TestMigration_BatchCheckOwnership(t *testing.T) {
 
 	var shouldLeaveCount, shouldStayCount int32
 
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[MigPlayerId, MigPlayerData]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[MigPlayerId, MigPlayerData], req *MigLogin, _ bool) (actor.OkReply, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			ctx.SetState(MigPlayerData{HP: req.HP, InBattle: false})
@@ -867,7 +868,7 @@ func TestMigration_BatchCheckOwnership(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// 广播 CheckOwnership
-	count, err := actor.Broadcast[MigPlayerId](mgr, &MigCheckOwnership{})
+	count, err := actor.Broadcast(mgr, &MigCheckOwnership{})
 	if err != nil {
 		t.Fatalf("broadcast failed: %v", err)
 	}

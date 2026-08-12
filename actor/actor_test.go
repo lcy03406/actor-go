@@ -109,7 +109,7 @@ func (req *testSpawningLogin) Handle(a *actor.ActorContext[TestActorId, TestActo
 }
 
 func setupManager(mgr *actor.Manager) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestLogout](b)
@@ -236,7 +236,7 @@ func TestActorCallWithinTimeout(t *testing.T) {
 // TestActorMulticast 测试多播功能。
 func TestActorMulticast(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestClose](b)
 	})
@@ -265,7 +265,7 @@ func TestActorMulticast(t *testing.T) {
 // TestActorRequestSpawn 测试 RegisterServe（首次请求创建 Actor 并返回回复）。
 func TestActorRequestSpawn(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterServeHandler[TestActorId, TestActorData, *TestLoginWithReply](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
 	})
@@ -296,7 +296,7 @@ func TestActorRequestSpawn(t *testing.T) {
 // 对已存在 Actor 再次调用同一 handler 时 spawning=false。
 func TestActorSpawningFlag(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		// 使用 RegisterServeHandler（allow_spawn=true, allow_query=true）才能让 handler
 		// 在 Actor 已存在时也被调用，从而触发 spawning=false 分支。
 		actor.RegisterServeHandler[TestActorId, TestActorData, *testSpawningLogin](b)
@@ -349,7 +349,7 @@ func TestActorCallContextCancel(t *testing.T) {
 // TestActorCallTimeoutExceeded 测试超时发生时 Call 返回错误。
 func TestActorCallTimeoutExceeded(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		// 注册一个会延迟的 handler
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testSlowAdd](b)
@@ -397,7 +397,7 @@ func TestActorSequentialCalls(t *testing.T) {
 // TestActorHandlerPanic 测试 handler 中发生 panic 时，Call 能收到错误而非让 actor 崩溃。
 func TestActorHandlerPanic(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testPanicAdd](b)
 	})

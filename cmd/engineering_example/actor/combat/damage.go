@@ -2,8 +2,8 @@
 //
 // 命名首词即来源（解决"内外/节点"无法稳定区分的问题）：
 //   - Player*：落到某个 Player actor 身上的事件（由另一个 actor 推过来）
-//       · PlayerDamage      —— 攻击方 → 被攻击方：造成一次伤害
-//       · PlayerCombatResult —— 被攻击方 → 攻击方：回传伤害结果（用于结算奖励）
+//     · PlayerDamage      —— 攻击方 → 被攻击方：造成一次伤害
+//     · PlayerCombatResult —— 被攻击方 → 攻击方：回传伤害结果（用于结算奖励）
 //
 // combat 包只放「真正跨 actor 的那一跳」协议 + 极薄 handler 壳，
 // 不持有任何业务状态逻辑（逻辑在 types.PlayerState / attr.AttrState 上）。
@@ -64,10 +64,10 @@ func (req *PlayerDamage) Handle(ctx *types.PlayerActorCtx, spawning bool) (*Play
 	// 这一跳是跨 actor 的（被攻击方 actor → 攻击方 actor），奖励严格发生在
 	// 「收到对面状态通知之后」，而非攻击发出时。
 	_ = actor.Post(ctx.Manager(), req.Attacker, &PlayerCombatResult{
-		Target:   ctx.Id(),
-		NewHP:    data.HP,
-		Dead:     dead,
-		Damage:   mit,
+		Target:       ctx.Id(),
+		NewHP:        data.HP,
+		Dead:         dead,
+		Damage:       mit,
 		AttackerRoom: data.CurrentRoom,
 	})
 

@@ -75,7 +75,7 @@ func (*ForceSave) ReqType(_ PlayerId, _ *SaveReply) string { return "ForceSave" 
 // ─── Handlers ───
 
 func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
-	actor.Serve(mgr, 100, func(b *RegBuilder) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *RegBuilder) {
 		// 使用 SetupGrain 将生命周期托管给框架：
 		// OnSpawn 自动 Activate 并按 onActivate 回调初始化，
 		// OnQuit 自动 Persist + 释放租约，并按 WithAutoPersistInterval 定时存盘。

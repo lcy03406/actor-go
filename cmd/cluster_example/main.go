@@ -74,7 +74,7 @@ type PlayerId struct {
 }
 
 func (id PlayerId) ActorType() actor.ActorType { return "Player" }
-func (id PlayerId) String() string              { return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId) }
+func (id PlayerId) String() string             { return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId) }
 
 type RoomId struct {
 	RoomId int `json:"roomId"`
@@ -243,13 +243,15 @@ func main() {
 
 // ─── 节点启动 ───
 
+var options100 = actor.Options{BufMails: 100}
+
 func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Router {
 	mgr := actor.NewManager()
 
 	// 根据节点类型注册 Actor Group
 	switch nodeType {
 	case "player-server", "all-in-one":
-		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
 				ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
 				log.Printf("[Player] %s 登录 HP=%d Level=%d", ctx.Id().String(), req.InitHP, req.InitLevel)
@@ -279,7 +281,7 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 		})
 	}
 	if nodeType == "room-server" || nodeType == "all-in-one" {
-		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
+		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *CreateRoom, _ bool) (actor.OkReply, error) {
 				ctx.SetState(RoomState{MaxPlayers: req.MaxPlayers})
 				log.Printf("[Room] %s 创建 最大人数=%d", ctx.Id().String(), req.MaxPlayers)
@@ -291,7 +293,7 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 		})
 	}
 	if nodeType == "chat-server" || nodeType == "all-in-one" {
-		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
+		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *SendMessage, _ bool) (*SendMessageReply, error) {
 				ctx.State().Messages = append(ctx.State().Messages, req.Text)
 				log.Printf("[Chat] %s 消息: %s", ctx.Id().String(), req.Text)
@@ -357,19 +359,19 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 		// 延迟注册 CheckOwnership handler（需要在 Serve 之后）
 		registerPlayerMigrationHandlers(mgr, placement, mem)
 		coord.RegisterNotify(func() {
-			actor.Broadcast[PlayerId](mgr, &CheckOwnership{})
+			actor.Broadcast(mgr, &CheckOwnership{})
 		})
 	}
 	if nodeType == "room-server" || nodeType == "all-in-one" {
 		registerRoomMigrationHandlers(mgr, placement, mem)
 		coord.RegisterNotify(func() {
-			actor.Broadcast[RoomId](mgr, &RoomCheckOwnership{})
+			actor.Broadcast(mgr, &RoomCheckOwnership{})
 		})
 	}
 	if nodeType == "chat-server" || nodeType == "all-in-one" {
 		registerChatMigrationHandlers(mgr, placement, mem)
 		coord.RegisterNotify(func() {
-			actor.Broadcast[ChatId](mgr, &ChatCheckOwnership{})
+			actor.Broadcast(mgr, &ChatCheckOwnership{})
 		})
 	}
 
@@ -484,6 +486,8 @@ func (d *dynamicMembership) RemoveNode(nodeID string) {
 
 // ─── 迁移 Handler 注册 ───
 
+var options0 = actor.Options{BufMails: 0}
+
 func registerPlayerMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
 	// 注册 CheckOwnership handler 到已存在的 Player group
 	// 注意：这里使用 Post + 空 ActorId 的方式无法直接注册到已有 group，
@@ -493,7 +497,7 @@ func registerPlayerMigrationHandlers(mgr *actor.Manager, placement cluster.Place
 	// 实际上 RegisterServe 是通过 RegistryBuilder 调用的，这里改用直接方式。
 	// 因为 Serve 已经调用过了，我们需要在已有 group 上添加 handler。
 	// 最简单的方式是用一个新的 Serve 调用（会追加 handler 到已有 group）。
-	actor.Serve(mgr, 0, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.Serve(mgr, options0, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *CheckOwnership, _ bool) (actor.OkReply, error) {
 			selfID := mem.Self().ID
 			members := mem.Members()
@@ -512,7 +516,7 @@ func registerPlayerMigrationHandlers(mgr *actor.Manager, placement cluster.Place
 }
 
 func registerRoomMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
-	actor.Serve(mgr, 0, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
+	actor.Serve(mgr, options0, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *RoomCheckOwnership, _ bool) (actor.OkReply, error) {
 			selfID := mem.Self().ID
 			members := mem.Members()
@@ -529,7 +533,7 @@ func registerRoomMigrationHandlers(mgr *actor.Manager, placement cluster.Placeme
 }
 
 func registerChatMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
-	actor.Serve(mgr, 0, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
+	actor.Serve(mgr, options0, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
 		actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *ChatCheckOwnership, _ bool) (actor.OkReply, error) {
 			selfID := mem.Self().ID
 			members := mem.Members()
@@ -616,7 +620,7 @@ func repl(ctx context.Context, router *Router) {
 			}
 			hp, _ := strconv.Atoi(args[1])
 			id := PlayerId{ServerId: 1, OpenId: args[0]}
-			err := cluster.Post[JsonMsg, JsonC, JsonT](router, id, &Login{InitHP: hp, InitLevel: 1})
+			err := cluster.Post(router, id, &Login{InitHP: hp, InitLevel: 1})
 			if err != nil {
 				fmt.Printf("错误: %v\n", err)
 			} else {
@@ -659,7 +663,7 @@ func repl(ctx context.Context, router *Router) {
 			rid, _ := strconv.Atoi(args[0])
 			max, _ := strconv.Atoi(args[1])
 			id := RoomId{RoomId: rid}
-			err := cluster.Post[JsonMsg, JsonC, JsonT](router, id, &CreateRoom{MaxPlayers: max})
+			err := cluster.Post(router, id, &CreateRoom{MaxPlayers: max})
 			if err != nil {
 				fmt.Printf("错误: %v\n", err)
 			} else {

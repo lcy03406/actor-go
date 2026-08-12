@@ -52,8 +52,12 @@ type BenchLoginWithReply struct{ Init int }
 
 func (*BenchLoginWithReply) ReqType(_ BenchId, _ *BenchAddReply) string { return "BenchLoginWithReply" }
 
+var options = actor.Options{
+	BufMails: 1024,
+}
+
 func setupBenchManagerV2(mgr *actor.Manager) {
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
 			return actor.OK, nil
@@ -106,7 +110,8 @@ func BenchmarkV2Call(b *testing.B) {
 // BenchmarkV2Post 单 Actor 顺序 Post（fire-and-forget）。
 func BenchmarkV2Post(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1<<20, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
+	optoins := actor.Options{BufMails: 1 << 20}
+	actor.Serve(mgr, optoins, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
 			return actor.OK, nil
@@ -129,7 +134,7 @@ func BenchmarkV2Post(b *testing.B) {
 // PostThenCall ≈ Post+Call 全链，PostThenCall − Post ≈ 一次完整 Call 链路（处理+回复）。
 func BenchmarkV2PostThenCall(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(bb *actor.RegistryBuilder[BenchId, BenchState]) {
+	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
 			return actor.OK, nil
@@ -199,7 +204,7 @@ func BenchmarkV2Broadcast(b *testing.B) {
 	mgr := actor.NewManager()
 
 	var sent, recv atomic.Int64
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
 			return actor.OK, nil
@@ -274,9 +279,9 @@ func BenchmarkV2ConcurrentCalls(b *testing.B) {
 
 // BenchmarkV2PostParallel 并发 Post 同一 Actor。
 func BenchmarkV2PostParallel(b *testing.B) {
-	const mailboxSize = 1 << 20
+	optoins := actor.Options{BufMails: 1 << 20}
 	mgr := actor.NewManager()
-	actor.Serve(mgr, mailboxSize, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
+	actor.Serve(mgr, optoins, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
 			return actor.OK, nil
@@ -361,9 +366,10 @@ func BenchmarkV2CallLatency(b *testing.B) {
 // 小容量 mailbox 在高并发 Post 下更容易满，本测试对比不同容量下的 drop 率。
 func BenchmarkV2PostSmallMailbox(b *testing.B) {
 	for _, cap := range []int{4, 16, 64} {
+		optoins := actor.Options{BufMails: cap}
 		b.Run(fmt.Sprintf("cap=%d", cap), func(b *testing.B) {
 			mgr := actor.NewManager()
-			actor.Serve(mgr, cap, func(bb *actor.RegistryBuilder[BenchId, BenchState]) {
+			actor.Serve(mgr, optoins, func(bb *actor.RegistryBuilder[BenchId, BenchState]) {
 				actor.RegisterSpawn(bb, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 					a.State().N = req.Init
 					return actor.OK, nil

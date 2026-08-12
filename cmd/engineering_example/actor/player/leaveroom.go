@@ -22,7 +22,9 @@ type ControlLeaveRoomReply struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-func (*ControlLeaveRoom) ReqType(_ types.PlayerId, _ *ControlLeaveRoomReply) string { return "ControlLeaveRoom" }
+func (*ControlLeaveRoom) ReqType(_ types.PlayerId, _ *ControlLeaveRoomReply) string {
+	return "ControlLeaveRoom"
+}
 
 func (req *ControlLeaveRoom) Handle(ctx *types.PlayerActorCtx, spawning bool) (*ControlLeaveRoomReply, error) {
 	roomId := ctx.State().Data.CurrentRoom

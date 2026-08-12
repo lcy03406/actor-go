@@ -41,28 +41,43 @@ func (m *Manager) Logger() *slog.Logger {
 	return m.logger
 }
 
+type TraceOption int
+
+const (
+	TraceNone TraceOption = iota
+	TraceHead
+	TraceBrief
+	TraceVerbose
+)
+
+type Options struct {
+	BufMails  int
+	TraceSend TraceOption
+	TraceRecv TraceOption
+}
+
 // ServeWith 注册一个 Group 的 Actor 类型及其处理器。
 // A 是 ActorId 类型，S 是 State 类型，由 RegistryBuilder 推导。
 // 调用后不应再修改builder。
 // 如果同类型 Group 已存在则 panic。
-func ServeWith[A ActorId, S any](mgr *Manager, bufMails int, builder *RegistryBuilder[A, S]) {
+func ServeWith[A ActorId, S any](mgr *Manager, options Options, builder *RegistryBuilder[A, S]) {
 	actorType := actorTypeOf[A]()
 
 	if _, ok := mgr.groups[actorType]; ok {
 		panic("actor type already registered: " + actorType)
 	}
 
-	mgr.groups[actorType] = newGroup(mgr, builder.handlers, builder.on_spawn, bufMails)
-	mgr.logger.Info("serving actor type", "type", actorType, "bufMails", bufMails)
+	mgr.groups[actorType] = newGroup(mgr, builder.handlers, builder.on_spawn, options)
+	mgr.logger.Info("serving actor type", "type", actorType, "options", options)
 }
 
 // Serve 注册一个 Group 的 Actor 类型及其处理器。
 // A 是 ActorId 类型，S 是 State 类型，由 RegistryBuilder 中的 handler 函数签名推导。
 // 如果同类型 Group 已存在则 panic。
-func Serve[A ActorId, S any](mgr *Manager, bufMails int, build func(*RegistryBuilder[A, S])) {
+func Serve[A ActorId, S any](mgr *Manager, options Options, build func(*RegistryBuilder[A, S])) {
 	builder := NewRegistryBuilder[A, S]()
 	build(builder)
-	ServeWith(mgr, bufMails, builder)
+	ServeWith(mgr, options, builder)
 }
 
 func findGroup[A ActorId](mgr *Manager, id A) groupBase[A] {
@@ -182,17 +197,17 @@ func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 an
 	return MulticastIter(mgr, slices.Values(ids), req)
 }
 
-// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+// MulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func MulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids map[A]X, req Q) (int, error) {
 	return MulticastIter(mgr, maps.Keys(ids), req)
 }
 
-// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+// MulticastValues 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func MulticastValues[X comparable, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids map[X]A, req Q) (int, error) {
 	return MulticastIter(mgr, maps.Values(ids), req)
 }
 
-// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+// MulticastIter 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func MulticastIter[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids iter.Seq[A], req Q) (int, error) {
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)

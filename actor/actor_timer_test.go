@@ -34,7 +34,9 @@ type testTimerCancelLogin struct {
 	Data TestActorData
 }
 
-func (*testTimerCancelLogin) ReqType(_ TestActorId, _ actor.OkReply) string { return "TestTimerCancelLogin" }
+func (*testTimerCancelLogin) ReqType(_ TestActorId, _ actor.OkReply) string {
+	return "TestTimerCancelLogin"
+}
 func (req *testTimerCancelLogin) Handle(a *actor.ActorContext[TestActorId, TestActorData], _ bool) (actor.OkReply, error) {
 	a.Open() // spawn 后保持活跃（框架不再自动激活）
 	a.SetState(TestActorData{Int: req.Data.Int})
@@ -63,9 +65,9 @@ func (req *testLogoutTimer) Handle(a *actor.ActorContext[TestActorId, TestActorD
 
 // testLoginTimer spawn 时设置定时器（供测试关闭/强制关闭取消定时器）。
 type testLoginTimer struct {
-	Data      TestActorData
-	Fired     *atomic.Bool
-	Done      chan struct{}
+	Data  TestActorData
+	Fired *atomic.Bool
+	Done  chan struct{}
 }
 
 func (*testLoginTimer) ReqType(_ TestActorId, _ actor.OkReply) string { return "TestLoginTimer" }
@@ -84,7 +86,7 @@ func (req *testLoginTimer) Handle(a *actor.ActorContext[TestActorId, TestActorDa
 // TestActorTimer 测试定时器功能。
 func TestActorTimer(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testTimerLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
 	})
@@ -106,7 +108,7 @@ func TestActorTimer(t *testing.T) {
 // TestActorTimerCancel 测试取消定时器。
 func TestActorTimerCancel(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testTimerCancelLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
 	})
@@ -129,7 +131,7 @@ func TestActorTimerCancel(t *testing.T) {
 func TestTimerCancelledOnQuit(t *testing.T) {
 	var timerFired atomic.Bool
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		// handler 设置定时器后调用 Quit，定时器应被取消
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testLogoutTimer](b)
@@ -161,7 +163,7 @@ func TestTimerCancelledOnClose(t *testing.T) {
 	var timerFired atomic.Bool
 	spawnDone := make(chan struct{})
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testLoginTimer](b)
 	})
 
@@ -189,7 +191,7 @@ func TestTimerCancelledOnKill(t *testing.T) {
 	var timerFired atomic.Bool
 	spawnDone := make(chan struct{})
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testLoginTimer](b)
 	})
 

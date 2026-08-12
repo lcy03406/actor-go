@@ -13,7 +13,7 @@ import (
 
 // Register 一次性注册 handler + RPC 入口 + 集群 CheckOwnership。
 func Register(mgr *actor.Manager, rpcBld *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec], placement cluster.PlacementStrategy, selfID string) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
 		rpc.RegisterRequest(rpcBld, actor.RegisterServeHandler2(b, (*CreateRoom)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*JoinRoom)(nil)))
 		rpc.RegisterRequest(rpcBld, actor.RegisterQueryHandler2(b, (*RoomInfo)(nil)))

@@ -26,7 +26,7 @@ type groupBase[A ActorId] interface {
 type group[A ActorId, S anyState] struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
-	bufMails int
+	options  Options
 	mu       sync.RWMutex
 	stopping atomic.Bool
 	logger   *slog.Logger
@@ -37,14 +37,14 @@ type group[A ActorId, S anyState] struct {
 	idle     atomic.Int32
 }
 
-func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A], on_spawn OnSpawnFn[A, S], bufMails int) *group[A, S] {
+func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A], on_spawn OnSpawnFn[A, S], options Options) *group[A, S] {
 	ctx, cancel := context.WithCancel(m.ctx)
 	actorType := actorTypeOf[A]()
 	logger := slog.With("group", actorType)
 	return &group[A, S]{
 		ctx:      ctx,
 		cancel:   cancel,
-		bufMails: bufMails,
+		options:  options,
 		logger:   logger,
 		mgr:      m,
 		registry: registry,
@@ -88,7 +88,7 @@ func (g *group[A, S]) holdActorForRef(id A) *actorRuntime[A, S] {
 
 func (g *group[A, S]) spawnActor(id A) (*actorRuntime[A, S], bool) {
 	// newActor 在锁外预分配，锁内仅做 map 插入。
-	actor := newActor(id, g, g.bufMails)
+	actor := newActor(id, g, g.options)
 	// 新 actor 对其他 goroutine 不可见，Store 放在锁外安全。
 	// holder=2：1 管理器引用（阻止退出），1 调用方引用（用完 unhold）。
 	actor.holder.Store(2)

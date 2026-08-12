@@ -25,7 +25,9 @@ type PlayerRoomChatReply struct {
 	Reason  string `json:"reason,omitempty"`
 }
 
-func (*PlayerRoomChat) ReqType(_ types.PlayerId, _ *PlayerRoomChatReply) string { return "PlayerRoomChat" }
+func (*PlayerRoomChat) ReqType(_ types.PlayerId, _ *PlayerRoomChatReply) string {
+	return "PlayerRoomChat"
+}
 
 func (req *PlayerRoomChat) Handle(ctx *types.PlayerActorCtx, spawning bool) (*PlayerRoomChatReply, error) {
 	roomId := ctx.State().Data.CurrentRoom

@@ -21,18 +21,21 @@ func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorCon
 	id := actor.id
 	return &ActorContext[A, S]{
 		ctrl: ActorControl{
-			ctx:    ctx,
-			logger: actor.logger,
-			mgr:    actor.g.mgr,
-			cancel: cancel,
+			ctx:       ctx,
+			logger:    actor.logger,
+			traceSend: actor.g.options.TraceSend,
+			mgr:       actor.g.mgr,
+			cancel:    cancel,
 			timerFn: func(i *timerStub) func() {
 				return func() {
 					a := g.holdActor(id)
-					if a != nil {
-						defer a.unhold()
-					}
-					if a != actor {
+					if a == nil {
 						actor.logger.Warn("timer fired after closed")
+						return
+					}
+					defer a.unhold()
+					if a != actor {
+						actor.logger.Warn("timer fired after respawn")
 						return
 					}
 					if err := actor.send(timerInvoke[A, S]{i}); err != nil {

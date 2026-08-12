@@ -68,8 +68,10 @@ func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 
 // ─── Handlers ───
 
+var options100 = actor.Options{BufMails: 100}
+
 func setupPlayer(mgr *actor.Manager) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
 			ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
 			ctx.Logger().Info("player login", "hp", req.InitHP, "level", req.InitLevel)

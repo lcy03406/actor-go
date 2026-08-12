@@ -20,7 +20,7 @@ type actorRuntime[A ActorId, S anyState] struct {
 	holder  atomic.Int32 //引用计数，初始1，为0时关闭mailbox
 }
 
-func newActor[A ActorId, S anyState](id A, g *group[A, S], bufMails int) *actorRuntime[A, S] {
+func newActor[A ActorId, S anyState](id A, g *group[A, S], options Options) *actorRuntime[A, S] {
 	ctx, cancel := context.WithCancel(g.ctx)
 	return &actorRuntime[A, S]{
 		ctx:     ctx,
@@ -28,7 +28,7 @@ func newActor[A ActorId, S anyState](id A, g *group[A, S], bufMails int) *actorR
 		id:      id,
 		g:       g,
 		logger:  slog.With("actor", id.String()),
-		mailbox: make(chan invokable[A, S], bufMails),
+		mailbox: make(chan invokable[A, S], options.BufMails),
 		doneCh:  make(chan struct{}),
 	}
 }
@@ -185,8 +185,8 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 			continue
 		}
 		if spawning {
-		// 创建 ctx 且默认 active=false（空闲/未激活），
-		// 由用户在回调中调用 Open / grain.State.Activate 翻转为 true。
+			// 创建 ctx 且默认 active=false（空闲/未激活），
+			// 由用户在回调中调用 Open / grain.State.Activate 翻转为 true。
 			nctx = newActorContext(a)
 		}
 		// 记录进入 invoke 前的 active 状态（spawning 时此处必为 false，早于 OnSpawn，

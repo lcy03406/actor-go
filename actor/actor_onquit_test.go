@@ -103,7 +103,7 @@ func (req *testOnQuitByKill) Handle(a *actor.ActorContext[TestActorId, TestActor
 func TestOnQuitCalledOnSelfQuit(t *testing.T) {
 	quitCalled := &atomic.Bool{}
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuit](b)
 	})
 
@@ -123,7 +123,7 @@ func TestOnQuitPushOrder(t *testing.T) {
 	order := []int{}
 	mu := &sync.Mutex{}
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitPush](b)
 	})
 
@@ -149,7 +149,7 @@ func TestOnQuitPushOrder(t *testing.T) {
 func TestOnQuitPanicRecovered(t *testing.T) {
 	afterPanic := &atomic.Bool{}
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitPanic](b)
 	})
 
@@ -172,7 +172,7 @@ func TestOnQuitCalledOnKill(t *testing.T) {
 	quitCalled := &atomic.Bool{}
 	done := make(chan struct{})
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitByKill](b)
 	})
 
@@ -213,7 +213,7 @@ func (req *testOnQuitSetter) Handle(a *actor.ActorContext[TestActorId, TestActor
 func TestOnQuitNotCalledWhileActive(t *testing.T) {
 	quitCalled := &atomic.Bool{}
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitSetter](b)
 	})
 

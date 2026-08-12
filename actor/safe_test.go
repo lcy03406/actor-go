@@ -81,8 +81,8 @@ type SafeTestClose struct{}
 
 func (*SafeTestClose) ReqType(_ SafeTestId, _ actor.OkReply) string { return "SafeTestClose" }
 
-func setupSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
+func setupSafeManager(mgr *actor.Manager) {
+	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
 		actor.RegisterSpawnHandler[SafeTestId, SafeTestState, *SafeTestInit](b)
 		actor.RegisterQueryHandler[SafeTestId, SafeTestState, *SafeTestAdd](b)
 		actor.RegisterQueryHandler[SafeTestId, SafeTestState, *SafeTestSlowAdd](b)
@@ -97,7 +97,7 @@ func setupSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
 func TestSafeCallBasic(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "safe_basic"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 10}); err != nil {
@@ -133,7 +133,7 @@ func TestSafeCallBasic(t *testing.T) {
 func TestSafeCallCleanupOnTimeout(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "safe_timeout"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
@@ -166,7 +166,7 @@ func TestSafeCallCleanupOnTimeout(t *testing.T) {
 func TestSafeCallCleanupOnContextCancel(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "safe_cancel"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
@@ -196,7 +196,7 @@ func TestSafeCallCleanupOnContextCancel(t *testing.T) {
 func TestSafeCallCleanupNotCalledOnSuccess(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "safe_success"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
@@ -225,7 +225,7 @@ func TestSafeCallCleanupNotCalledOnSuccess(t *testing.T) {
 func TestSafeCallConcurrent(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "safe_concurrent"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
@@ -276,7 +276,7 @@ func TestSafeCallGroupNotFound(t *testing.T) {
 func TestSafeCallCloseIdempotent(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "safe_idempotent"}
 	if err := actor.Post(mgr, id, &SafeTestInit{Value: 0}); err != nil {
@@ -308,7 +308,7 @@ func TestSafeCallVsCall(t *testing.T) {
 	var cleaned atomic.Bool
 
 	// 注册两个 Group：Safe 版本和普通版本
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
+	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[SafeTestId, SafeTestState]) {
 		actor.RegisterSpawnHandler[SafeTestId, SafeTestState, *SafeTestInit](b)
 		actor.RegisterQueryHandler[SafeTestId, SafeTestState, *SafeTestAdd](b)
 	})
@@ -445,8 +445,8 @@ func (req *RefGetRef) Handle(a *actor.ActorContext[RefSafeTestId, RefSafeState],
 	return &RefGetRefReply{Value: reply.Value}, nil
 }
 
-func setupRefSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
+func setupRefSafeManager(mgr *actor.Manager) {
+	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
 		actor.RegisterSpawnHandler[RefSafeTestId, RefSafeState, *RefSafeSpawn](b)
 		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeGet](b)
 		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeSlowGet](b)
@@ -461,7 +461,7 @@ func setupRefSafeManager(mgr *actor.Manager, cleaned *atomic.Bool) {
 func TestRefSafeCallBasic(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupRefSafeManager(mgr, &cleaned)
+	setupRefSafeManager(mgr)
 
 	id := RefSafeTestId{Name: "refsafe_basic"}
 	if err := actor.Post(mgr, id, &RefSafeSpawn{Value: 42}); err != nil {
@@ -485,7 +485,7 @@ func TestRefSafeCallBasic(t *testing.T) {
 func TestRefSafeCallCrossActor(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupRefSafeManager(mgr, &cleaned)
+	setupRefSafeManager(mgr)
 
 	// 创建两个 Actor
 	srcId := RefSafeTestId{Name: "src"}
@@ -521,7 +521,7 @@ func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
 	var cleaned atomic.Bool
 
 	// 注册两个 handler：一个正常获取，一个慢获取（用于超时）
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
+	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefSafeTestId, RefSafeState]) {
 		actor.RegisterSpawnHandler[RefSafeTestId, RefSafeState, *RefSafeSpawn](b)
 		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeGet](b)
 		actor.RegisterQueryHandler[RefSafeTestId, RefSafeState, *RefSafeSlowGet](b)
@@ -560,7 +560,7 @@ func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
 func TestRefSafeCallClosedActor(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupRefSafeManager(mgr, &cleaned)
+	setupRefSafeManager(mgr)
 
 	targetId := RefSafeTestId{Name: "target_closed"}
 	srcId := RefSafeTestId{Name: "src_closed"}
@@ -611,7 +611,7 @@ func TestSafeCallTypeSafety(t *testing.T) {
 	// 以下代码能编译通过：
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
-	setupSafeManager(mgr, &cleaned)
+	setupSafeManager(mgr)
 
 	id := SafeTestId{Name: "type_safe"}
 	actor.Post(mgr, id, &SafeTestInit{Value: 0})

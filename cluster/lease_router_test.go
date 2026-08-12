@@ -143,7 +143,7 @@ func TestRouter_CallNormal(t *testing.T) {
 	mem := newStaticMembership(node1, node1)
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &LeasePong{Msg: req.Msg + "-pong"}, nil
@@ -173,7 +173,7 @@ func TestRouter_PostNormal(t *testing.T) {
 
 	var received string
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			received = req.Msg
@@ -205,7 +205,7 @@ func TestRouter_CallWithForceReleaser_Normal(t *testing.T) {
 	mem := newStaticMembership(node1, node1)
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			return &LeasePong{Msg: req.Msg + "-pong"}, nil
@@ -243,7 +243,7 @@ func TestRouter_LeaseTakenTriggersForceRelease(t *testing.T) {
 	mem := newStaticMembership(node1, node1, node2)
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, spawning bool) (*LeasePong, error) {
 			if spawning {
 				return nil, &grain.ErrLeaseTaken{Key: ctx.Id().String(), Owner: "node-2", Generation: 5}
@@ -289,7 +289,7 @@ func TestRouter_LeaseRetryNoForceReleaser(t *testing.T) {
 	mem := newStaticMembership(node1, node1, node2)
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, spawning bool) (*LeasePong, error) {
 			if spawning {
 				return nil, &grain.ErrLeaseTaken{Key: ctx.Id().String(), Owner: "node-2", Generation: 5}

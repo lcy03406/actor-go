@@ -19,9 +19,6 @@ type (
 	hetMsg    = json.RawMessage
 	hetCodec  = rpc.JsonCodec
 	hetTransp = rpc.JsonTransport
-	hetSrv    = rpc.Server[hetMsg, hetCodec, hetTransp]
-	hetCli    = rpc.Client[hetMsg, hetCodec, hetTransp]
-	hetRouter = cluster.Router[hetMsg, hetCodec, hetTransp]
 	hetReg    = rpc.RegistryBuilder[hetMsg, hetCodec]
 )
 
@@ -151,10 +148,10 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 	}
 
 	mgr := actor.NewManager()
-
+	options100 := actor.Options{BufMails: 100}
 	switch nodeType {
 	case "player-server":
-		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HPlayerId, HPlayerState]) {
+		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[HPlayerId, HPlayerState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[HPlayerId, HPlayerState], req *HLogin, _ bool) (actor.OkReply, error) {
 				ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 				ctx.SetState(HPlayerState{HP: req.InitHP, Level: req.InitLevel})
@@ -170,7 +167,7 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 			})
 		})
 	case "room-server":
-		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HRoomId, HRoomState]) {
+		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[HRoomId, HRoomState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[HRoomId, HRoomState], req *HCreateRoom, _ bool) (actor.OkReply, error) {
 				ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 				ctx.SetState(HRoomState{MaxPlayers: req.MaxPlayers})
@@ -181,7 +178,7 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 			})
 		})
 	case "chat-server":
-		actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HChatId, HChatState]) {
+		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[HChatId, HChatState]) {
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[HChatId, HChatState], req *HSendMessage, _ bool) (*HSendMessageReply, error) {
 				ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 				ctx.State().Messages = append(ctx.State().Messages, req.Text)
@@ -276,7 +273,7 @@ func TestHeterogeneousCluster_E2E_Network(t *testing.T) {
 	t.Run("player_operations", func(t *testing.T) {
 		id := HPlayerId{ServerId: 1, OpenId: "alice"}
 
-		err := cluster.Post[hetMsg, hetCodec, hetTransp](pRouter, id, &HLogin{InitHP: 100, InitLevel: 1})
+		err := cluster.Post(pRouter, id, &HLogin{InitHP: 100, InitLevel: 1})
 		if err != nil {
 			t.Fatalf("Post Login: %v", err)
 		}
@@ -314,7 +311,7 @@ func TestHeterogeneousCluster_E2E_Network(t *testing.T) {
 	t.Run("room_operations", func(t *testing.T) {
 		id := HRoomId{RoomId: 1001}
 
-		err := cluster.Post[hetMsg, hetCodec, hetTransp](rRouter, id, &HCreateRoom{MaxPlayers: 10})
+		err := cluster.Post(rRouter, id, &HCreateRoom{MaxPlayers: 10})
 		if err != nil {
 			t.Fatalf("Post CreateRoom: %v", err)
 		}
@@ -343,7 +340,7 @@ func TestHeterogeneousCluster_E2E_Network(t *testing.T) {
 	t.Run("chat_operations", func(t *testing.T) {
 		id := HChatId{Channel: "general"}
 
-		err := cluster.Post[hetMsg, hetCodec, hetTransp](cRouter, id, &HSendMessage{Text: "hello world"})
+		err := cluster.Post(cRouter, id, &HSendMessage{Text: "hello world"})
 		if err != nil {
 			t.Fatalf("Post SendMessage: %v", err)
 		}
@@ -458,7 +455,7 @@ func TestHeterogeneousCluster_Broadcast(t *testing.T) {
 	// 创建多个 Player
 	for i := 0; i < 3; i++ {
 		id := HPlayerId{ServerId: 1, OpenId: fmt.Sprintf("bc-%d", i)}
-		err := cluster.Post[hetMsg, hetCodec, hetTransp](pRouter, id, &HLogin{InitHP: 100, InitLevel: 1})
+		err := cluster.Post(pRouter, id, &HLogin{InitHP: 100, InitLevel: 1})
 		if err != nil {
 			t.Fatalf("Post Login %d: %v", i, err)
 		}
@@ -467,7 +464,7 @@ func TestHeterogeneousCluster_Broadcast(t *testing.T) {
 
 	// 广播 Attack（会发到 player-server 和 room-server）
 	// room-server 没有 Player Group，RPC Server 会返回 unknown reqType
-	err := cluster.Broadcast[hetMsg, hetCodec, hetTransp, HPlayerId](pRouter, &HAttack{Damage: 10})
+	err := cluster.Broadcast(pRouter, &HAttack{Damage: 10})
 	if err != nil {
 		t.Logf("Broadcast error (expected if some nodes lack the group): %v", err)
 	}

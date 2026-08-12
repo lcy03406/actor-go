@@ -64,13 +64,13 @@ func TestMultiGroup(t *testing.T) {
 	mgr := actor.NewManager()
 
 	// 注册 Group1：TestActorId + TestActorData
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
 	})
 
 	// 注册 Group2：TestActorId2 + TestActorData2
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId2, TestActorData2]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId2, TestActorData2]) {
 		actor.RegisterSpawnHandler[TestActorId2, TestActorData2, *TestSpawn2](b)
 		actor.RegisterQueryHandler[TestActorId2, TestActorData2, *TestPing](b)
 		actor.RegisterQueryHandler[TestActorId2, TestActorData2, *TestReset](b)
@@ -124,11 +124,11 @@ func TestMultiGroup(t *testing.T) {
 func TestMultiGroupTypeSafety(t *testing.T) {
 	mgr := actor.NewManager()
 
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 	})
 
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId2, TestActorData2]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId2, TestActorData2]) {
 		actor.RegisterSpawnHandler[TestActorId2, TestActorData2, *TestSpawn2](b)
 	})
 

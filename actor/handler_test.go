@@ -105,7 +105,7 @@ func (req *HandlerSlow) Handle(ctx *actor.ActorContext[HandlerTestId, HandlerTes
 // ─── 注册辅助函数 ───
 
 func setupHandlerManager(mgr *actor.Manager) {
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
 		actor.RegisterSpawnHandler[HandlerTestId, HandlerTestState, *HandlerSpawn](b)
 		actor.RegisterQueryHandler[HandlerTestId, HandlerTestState, *HandlerAdd](b)
 		actor.RegisterServeHandler[HandlerTestId, HandlerTestState, *HandlerServe](b)
@@ -221,7 +221,7 @@ func TestRequestHandlerWithSafeCall(t *testing.T) {
 	mgr := actor.NewManager()
 	var cleaned atomic.Bool
 
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
 		actor.RegisterSpawnHandler[HandlerTestId, HandlerTestState, *HandlerSpawn](b)
 		actor.RegisterQueryHandler[HandlerTestId, HandlerTestState, *HandlerSafe](b)
 	})
@@ -315,7 +315,7 @@ func TestRequestHandlerVsRegisterQuery(t *testing.T) {
 	mgr := actor.NewManager()
 
 	// 用两种方式注册同一个 ActorType 的不同请求
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
 		// 方式1: RequestHandler 模式 — Handle 方法在请求类型上
 		actor.RegisterSpawnHandler[HandlerTestId, HandlerTestState, *HandlerSpawn](b)
 

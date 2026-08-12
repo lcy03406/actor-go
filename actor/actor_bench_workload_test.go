@@ -51,7 +51,7 @@ func fib(n int) int {
 // 测试 handler 中有实际计算开销时的吞吐量。
 func BenchmarkV2CallCPUWorkload(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			*a.State() = WorkloadState{Value: req.Init, Data: make(map[string]int)}
 			return actor.OK, nil
@@ -87,7 +87,7 @@ func (*StrProcReq) ReqType(_ WorkloadId, _ *StrProcReply) string { return "StrPr
 // BenchmarkV2CallStringWorkload 单 Actor Call 含字符串处理（反转、分词计数）。
 func BenchmarkV2CallStringWorkload(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.State().Value = req.Init
 			return actor.OK, nil
@@ -145,7 +145,7 @@ func (*MapOpsReq) ReqType(_ WorkloadId, _ *MapOpsReply) string { return "MapOpsR
 // BenchmarkV2CallMapWorkload 单 Actor Call 含 Map 操作（插入/查找/删除）。
 func BenchmarkV2CallMapWorkload(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			*a.State() = WorkloadState{Value: req.Init, Data: make(map[string]int)}
 			return actor.OK, nil
@@ -240,7 +240,7 @@ func (*GameGetInfoReq) ReqType(_ GamePlayerId, _ *GameGetInfoReply) string { ret
 
 // setupGameManagerV2 注册游戏玩家 Actor 的所有 handler。
 func setupGameManagerV2(mgr *actor.Manager) {
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[GamePlayerId, GamePlayerState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[GamePlayerId, GamePlayerState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[GamePlayerId, GamePlayerState], req *GameLoginReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(GamePlayerState{
 				HP:     req.InitHP,
@@ -370,7 +370,7 @@ func (*ChatGetInfoReq) ReqType(_ ChatRoomId, _ *ChatGetInfoReply) string { retur
 
 // setupChatManagerV2 注册聊天室 Actor 的所有 handler。
 func setupChatManagerV2(mgr *actor.Manager) {
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[ChatRoomId, ChatRoomState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[ChatRoomId, ChatRoomState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[ChatRoomId, ChatRoomState], req *ChatCreateReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(ChatRoomState{Members: make(map[int]string)})
 			return actor.OK, nil
@@ -494,7 +494,7 @@ func (*EOrderGetTotalReq) ReqType(_ EOrderId, _ *EOrderGetTotalReply) string {
 func BenchmarkV2ECommerceScenario(b *testing.B) {
 	const numOrders = 32
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[EOrderId, EOrderState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[EOrderId, EOrderState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[EOrderId, EOrderState], req *EOrderCreateReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(EOrderState{Status: "open"})
 			return actor.OK, nil
@@ -561,7 +561,7 @@ func BenchmarkV2ECommerceScenario(b *testing.B) {
 // BenchmarkV2ActorLifecycle 测试 Actor 完整生命周期吞吐：spawn → work → close。
 func BenchmarkV2ActorLifecycle(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init, Data: make(map[string]int)})
 			return actor.OK, nil
@@ -598,7 +598,7 @@ func BenchmarkV2MixedWorkload(b *testing.B) {
 	mgr := actor.NewManager()
 
 	var recv atomic.Int64
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init})
 			return actor.OK, nil
@@ -660,7 +660,7 @@ func BenchmarkV2MixedWorkloadNoSpawn(b *testing.B) {
 	mgr := actor.NewManager()
 
 	var recv atomic.Int64
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init})
 			return actor.OK, nil
@@ -721,7 +721,7 @@ func BenchmarkV2MixedWorkloadChurn(b *testing.B) {
 	mgr := actor.NewManager()
 
 	var recv atomic.Int64
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
+	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init})
 			return actor.OK, nil
@@ -829,7 +829,7 @@ func (*GrowQueryReq) ReqType(_ GrowStateId, _ *GrowQueryReply) string { return "
 // BenchmarkV2StatefulGrowingWorkload 测试 Actor 状态持续增长时的性能表现。
 func BenchmarkV2StatefulGrowingWorkload(b *testing.B) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 1024, func(bb *actor.RegistryBuilder[GrowStateId, GrowState]) {
+	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[GrowStateId, GrowState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[GrowStateId, GrowState], req *GrowSpawnReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(GrowState{
 				Slice:   make([]int, 0, 1024),

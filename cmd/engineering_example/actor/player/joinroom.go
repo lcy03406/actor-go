@@ -2,36 +2,36 @@
 //
 // 【关键设计：向其他 Actor 公开请求的类型】
 //
-//   两种请求类型的角色：
+//	两种请求类型的角色：
 //
-//   1. room.JoinRoom（Room 包定义）— Room Actor 的内部请求类型
-//      Room 包定义它需要的参数（PlayerId string），Room handler 实现加入逻辑。
-//      任何 Actor（Player 或外部调用者）都可以向 Room 发送此请求。
+//	1. room.JoinRoom（Room 包定义）— Room Actor 的内部请求类型
+//	   Room 包定义它需要的参数（PlayerId string），Room handler 实现加入逻辑。
+//	   任何 Actor（Player 或外部调用者）都可以向 Room 发送此请求。
 //
-//   2. ControlJoinRoom（本文件定义）— Player 对外公开的请求类型
-//      Player 暴露"从 Player 视角加入房间"的操作语义。
-//      外部调用者（console/cluster.Call）通过此类型触发 Player，
-//      Player handler 内部再转发给 Room Actor。
+//	2. ControlJoinRoom（本文件定义）— Player 对外公开的请求类型
+//	   Player 暴露"从 Player 视角加入房间"的操作语义。
+//	   外部调用者（console/cluster.Call）通过此类型触发 Player，
+//	   Player handler 内部再转发给 Room Actor。
 //
-//   ┌─────────┐  cluster.Call(router, pid, &player.ControlJoinRoom{RoomId: 1})
-//   │ console │ ─────────────────────────────────────────────────────────→ ┌──────────┐
-//   └─────────┘                                                            │  Player   │
-//                                                                          │  Handle() │
-//                                                                          │    ↓      │
-//                                                                          │  actor.Post(ctx.Manager(), roomId, &room.JoinRoom{...})
-//                                                                          │    │      │
-//                                                                          └────┼──────┘
-//                                                                               │
-//                                                                               ▼
-//                                                                          ┌──────────┐
-//                                                                          │   Room   │
-//                                                                          │  Handle()│
-//                                                                          └──────────┘
+//	┌─────────┐  cluster.Call(router, pid, &player.ControlJoinRoom{RoomId: 1})
+//	│ console │ ─────────────────────────────────────────────────────────→ ┌──────────┐
+//	└─────────┘                                                            │  Player   │
+//	                                                                       │  Handle() │
+//	                                                                       │    ↓      │
+//	                                                                       │  actor.Post(ctx.Manager(), roomId, &room.JoinRoom{...})
+//	                                                                       │    │      │
+//	                                                                       └────┼──────┘
+//	                                                                            │
+//	                                                                            ▼
+//	                                                                       ┌──────────┐
+//	                                                                       │   Room   │
+//	                                                                       │  Handle()│
+//	                                                                       └──────────┘
 //
 // 【跨 Group 通信方式】
 //
-//   使用 ctx.Manager() 获取 Manager 引用，然后通过 actor.Post / actor.Call 发送消息。
-//   不需要在请求结构体中注入 Manager，因为 ActorContext 始终持有 Manager 引用。
+//	使用 ctx.Manager() 获取 Manager 引用，然后通过 actor.Post / actor.Call 发送消息。
+//	不需要在请求结构体中注入 Manager，因为 ActorContext 始终持有 Manager 引用。
 package player
 
 import (
@@ -56,7 +56,9 @@ type ControlJoinRoomReply struct {
 	Reason       string `json:"reason,omitempty"`
 }
 
-func (*ControlJoinRoom) ReqType(_ types.PlayerId, _ *ControlJoinRoomReply) string { return "ControlJoinRoom" }
+func (*ControlJoinRoom) ReqType(_ types.PlayerId, _ *ControlJoinRoomReply) string {
+	return "ControlJoinRoom"
+}
 
 // Handle 处理 Player 加入 Room 的请求。
 //

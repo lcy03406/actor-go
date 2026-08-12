@@ -83,7 +83,7 @@ func TestOnSpawnCalledOnceOnCreate(t *testing.T) {
 	var calls atomic.Int32
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			calls.Add(1)
 			a.SetState(onSpawnState{Value: 7}) // OnSpawn 设置的初始值
@@ -122,7 +122,7 @@ func TestOnSpawnNotCalledOnExistingActor(t *testing.T) {
 	var calls atomic.Int32
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			calls.Add(1)
 			return nil
@@ -161,7 +161,7 @@ func TestOnSpawnErrorAbortsCreation(t *testing.T) {
 	fail := atomic.Bool{}
 
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			calls.Add(1)
 			if fail.Load() {
@@ -212,7 +212,7 @@ func TestOnSpawnErrorAbortsCreation(t *testing.T) {
 // 即使随后的 spawn handler 未调用 Open() 也如此。
 func TestOnSpawnCanOpenActor(t *testing.T) {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			a.Open() // 在 OnSpawn 中激活 Actor
 			return nil

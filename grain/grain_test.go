@@ -106,18 +106,17 @@ func activatingSpawn[Q any, R any](
 // setupManager 创建 manager 并按给定注册函数注册一组 grain handler，
 // 消除各测试中重复的 `actor.NewManager()` + `actor.Serve(...)` 包裹样板。
 func setupManager[S any, P any, K Snapshotter[S, P]](
-	pm *PersistenceManager,
 	register func(b *actor.RegistryBuilder[TestGrainId, State[TestGrainId, S, P, K]]),
 ) *actor.Manager {
 	mgr := actor.NewManager()
-	actor.Serve(mgr, 10, register)
+	actor.Serve(mgr, actor.Options{BufMails: 100}, register)
 	return mgr
 }
 
 // setupTestRegistry 创建 manager 并注册一组标准的 grain handler。
 func setupTestRegistry(t *testing.T, pm *PersistenceManager) *actor.Manager {
 	t.Helper()
-	return setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	return setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
@@ -189,7 +188,7 @@ func TestLifecycle_Persist(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			ctx.State().Data.Value = 999
 			if err := ctx.State().Persist(ctx); err != nil {
@@ -533,7 +532,7 @@ func TestPersistenceManager_NilDriver(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
@@ -592,7 +591,7 @@ func TestLifecycle_PersistMultipleTimes(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		actor.RegisterSpawn(b, activatingSpawn(pm, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		}))
@@ -753,7 +752,7 @@ func (*TestQuitReq) ReqType(_ TestGrainId, _ actor.OkReply) string { return "tes
 //   - 重新 spawn 数据已持久化。
 func TestSetupGrain_AutoActivateAndQuitPersist(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		SetupGrain(b, pm, nil)
 		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: ctx.State().Activated()}, nil
@@ -809,7 +808,7 @@ func TestSetupGrain_AutoActivateAndQuitPersist(t *testing.T) {
 func TestSetupGrain_OnActivateInit(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
 	var initCount, loadedCount int
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		SetupGrain(b, pm, func(ctx *testActorCtx, created bool) error {
 			if created {
 				initCount++
@@ -865,7 +864,7 @@ func TestSetupGrain_AutoPersistInterval(t *testing.T) {
 		WithNodeId("node-1"),
 		WithAutoPersistInterval(80*time.Millisecond),
 	)
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, testState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
 		SetupGrain(b, pm, nil)
 		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
@@ -947,7 +946,7 @@ func TestNilSnapshot_PersistSkipsSave(t *testing.T) {
 		WithDriver(NewJsonDriver(dir)),
 		WithNodeId("node-1"),
 	)
-	mgr := setupManager(pm, func(b *actor.RegistryBuilder[TestGrainId, nilState]) {
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, nilState]) {
 		SetupGrain(b, pm, func(ctx *nilActorCtx, created bool) error {
 			if created {
 				ctx.State().Data.Value = 555

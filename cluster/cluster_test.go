@@ -106,9 +106,11 @@ func newRouterWithManager(members ...Node) (*actor.Manager, *Router[DummyMessage
 
 // ─── Router 本地调用测试 ───
 
+var options10 = actor.Options{BufMails: 10}
+
 func TestRouter_LocalCall(t *testing.T) {
 	mgr, router := newRouterWithManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			return &Pong{Msg: req.Msg + "-pong"}, nil
 		})
@@ -134,7 +136,7 @@ func TestRouter_LocalPost(t *testing.T) {
 	var received string
 	var mu sync.Mutex
 	mgr, router := newRouterWithManager()
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
@@ -167,7 +169,7 @@ func TestRouter_LocalBroadcast(t *testing.T) {
 	var mu sync.Mutex
 	mgr, router := newRouterWithManager()
 
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
@@ -198,7 +200,7 @@ func TestRouter_LocalMulticast(t *testing.T) {
 	var mu sync.Mutex
 	mgr, router := newRouterWithManager()
 
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()
@@ -460,7 +462,7 @@ func TestRouter_Multicast_Mixed(t *testing.T) {
 	var localCount int32
 	var mu sync.Mutex
 	mgr, router := newRouterWithManager(node1, node2)
-	actor.Serve(mgr, 10, func(b *actor.RegistryBuilder[TestActorId, string]) {
+	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[TestActorId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[TestActorId, string], req *Ping, _ bool) (*Pong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
 			mu.Lock()

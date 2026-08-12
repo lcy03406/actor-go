@@ -71,7 +71,7 @@ type refBenchPostReq struct {
 func (*refBenchPostReq) ReqType(_ RefBenchId, _ actor.OkReply) string { return "RefBenchPost" }
 
 func setupRefBenchManager(mgr *actor.Manager) {
-	actor.Serve(mgr, 1024, func(b *actor.RegistryBuilder[RefBenchId, RefBenchState]) {
+	actor.Serve(mgr, actor.Options{BufMails: 1024}, func(b *actor.RegistryBuilder[RefBenchId, RefBenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[RefBenchId, RefBenchState], req *RefBenchLogin, _ bool) (actor.OkReply, error) {
 			a.State().N = req.Init
 			return actor.OK, nil

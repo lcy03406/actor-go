@@ -155,11 +155,15 @@ func TestKillActorBasic(t *testing.T) {
 	}
 }
 
+var options100 actor.Options = actor.Options{
+	BufMails: 100,
+}
+
 // TestCloseActorGraceful 测试温和关闭：in-flight handler 不被打断，正常完成。
 func TestCloseActorGraceful(t *testing.T) {
 	mgr := actor.NewManager()
 	handlerStart := make(chan struct{})
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testGracefulAdd](b)
 	})
@@ -204,7 +208,7 @@ func TestCloseActorGraceful(t *testing.T) {
 func TestKillActorInterrupts(t *testing.T) {
 	mgr := actor.NewManager()
 	handlerStart := make(chan struct{})
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testKillAdd](b)
 	})
@@ -250,7 +254,7 @@ func TestKillActorInterrupts(t *testing.T) {
 func TestCloseActorDrainsMailbox(t *testing.T) {
 	mgr := actor.NewManager()
 	handlerStart := make(chan struct{})
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testGracefulAdd](b)
 	})
@@ -369,7 +373,7 @@ func TestCloseJoinManager(t *testing.T) {
 	mgr := actor.NewManager()
 	handlerDone := make(chan struct{})
 
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testCloseWait](b)
 	})
@@ -478,7 +482,7 @@ func TestQuitExitsAtEndOfMessage(t *testing.T) {
 func TestKillDrainsMailbox(t *testing.T) {
 	mgr := actor.NewManager()
 	handlerStart := make(chan struct{})
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testKillAdd](b)
 	})
@@ -594,7 +598,7 @@ func TestActorFinalizeWithInFlight(t *testing.T) {
 	handlerStart := make(chan struct{})
 	handlerDone := make(chan struct{})
 
-	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
+	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testCloseWait2](b)
 	})

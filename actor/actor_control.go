@@ -3,20 +3,23 @@ package actor
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"math"
+	"slices"
 	"time"
 )
 
 type ActorControl struct {
-	ctx     context.Context
-	logger  *slog.Logger
-	mgr     *Manager
-	cancel  func()
-	timerFn func(i *timerStub) func()
-	active  bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
-	OnQuit  func() //用户注册，退出时框架调用
-	timers  map[TimerId]*time.Timer
-	timerId TimerId
+	ctx       context.Context
+	logger    *slog.Logger
+	traceSend TraceOption
+	mgr       *Manager
+	cancel    func()
+	timerFn   func(i *timerStub) func()
+	active    bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
+	OnQuit    func() //用户注册，退出时框架调用
+	timers    map[TimerId]*time.Timer
+	timerId   TimerId
 }
 
 func (a *ActorControl) clear() {
@@ -154,4 +157,63 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 	timer.Stop()              //不用管Stop结果，即使取消失败也没事
 	delete(a.timers, timerId) //只要从map里拿掉，就不会执行回调函数
 	return true
+}
+
+// CPost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
+func CPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
+	traceLog(a.traceSend, a.logger, "send post", id, req)
+	return Post(a.Manager(), id, req)
+}
+
+// CCall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
+func CCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (R, error) {
+	traceLog(a.traceSend, a.logger, "send call", id, req)
+	ctx := a.Context()
+	mgr := a.Manager()
+	rep, err := Call(ctx, mgr, id, req)
+	traceLog(a.traceSend, a.logger, "got reply", id, rep)
+	return rep, err
+}
+
+// CBroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
+func CBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, req Q) (int, error) {
+	traceLog(a.traceSend, a.logger, "broadcast", nil, req)
+	mgr := a.Manager()
+	return Broadcast(mgr, req)
+}
+
+// CMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func CMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
+	traceLog(a.traceSend, a.logger, "multicast", ids, req)
+	mgr := a.Manager()
+	return MulticastIter(mgr, slices.Values(ids), req)
+}
+
+// CMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func CMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) (int, error) {
+	keys := maps.Keys(ids)
+	traceLog(a.traceSend, a.logger, "multicast", keys, req)
+	mgr := a.Manager()
+	return MulticastIter(mgr, keys, req)
+}
+
+// CMulticastValues 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func CMulticastValues[X comparable, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[X]A, req Q) (int, error) {
+	keys := maps.Values(ids)
+	traceLog(a.traceSend, a.logger, "multicast", keys, req)
+	mgr := a.Manager()
+	return MulticastIter(mgr, maps.Values(ids), req)
+}
+
+func traceLog(option TraceOption, logger *slog.Logger, title string, to any, req any) {
+	switch option {
+	case TraceNone:
+		return
+	case TraceHead:
+		logger.Info(title, "to", to)
+	case TraceBrief:
+		fallthrough
+	case TraceVerbose:
+		logger.Info(title, "to", to, "req", req)
+	}
 }
