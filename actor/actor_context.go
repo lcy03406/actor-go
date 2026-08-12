@@ -17,6 +17,8 @@ type ActorContext[A ActorId, S anyState] struct {
 
 func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorContext[A, S] {
 	ctx, cancel := context.WithCancel(actor.ctx)
+	g := actor.g
+	id := actor.id
 	return &ActorContext[A, S]{
 		ctrl: ActorControl{
 			ctx:    ctx,
@@ -25,6 +27,14 @@ func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorCon
 			cancel: cancel,
 			timerFn: func(i *timerStub) func() {
 				return func() {
+					a := g.holdActor(id)
+					if a != nil {
+						defer a.unhold()
+					}
+					if a != actor {
+						actor.logger.Warn("timer fired after closed")
+						return
+					}
 					if err := actor.send(timerInvoke[A, S]{i}); err != nil {
 						actor.logger.Error("timer send failed", "error", err)
 					}
