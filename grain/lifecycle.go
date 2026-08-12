@@ -32,6 +32,7 @@
 package grain
 
 import (
+	"context"
 	"errors"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -86,17 +87,18 @@ func (s *State[A, D, S, T]) Deactivate(ctx *actor.ActorContext[A, State[A, D, S,
 		}
 	}
 
-	s.release(ctx, actorType)
+	s.release(ctx, actorType, ctx.Context())
 	ctx.Quit()
 }
 
 // release 释放租约（清空 owner），不写数据、不退出 Grain。
-// 供 Deactivate 与生命周期钩子（OnQuit）复用。
-func (s *State[A, D, S, T]) release(ctx *actor.ActorContext[A, State[A, D, S, T]], actorType string) {
+// 供 Deactivate 与生命周期钩子（OnQuit）复用。c 为执行 Release 所用的 context，
+// 退出钩子场景需传入不受 actor 取消影响的 context（见 persist 的调用方）。
+func (s *State[A, D, S, T]) release(ctx *actor.ActorContext[A, State[A, D, S, T]], actorType string, c context.Context) {
 	if s.lease == nil {
 		return
 	}
-	if err := s.pm.driver.Release(ctx.Context(), actorType, ctx.Id().String(), s.pm.nodeId, s.lease.Generation); err != nil {
+	if err := s.pm.driver.Release(c, actorType, ctx.Id().String(), s.pm.nodeId, s.lease.Generation); err != nil {
 		ctx.Logger().Warn("grain: release lease failed", "id", ctx.Id(), "err", err)
 	}
 }
@@ -105,6 +107,14 @@ func (s *State[A, D, S, T]) release(ctx *actor.ActorContext[A, State[A, D, S, T]
 // 每次调用都会续租，重置租约 TTL。
 // 必须在 Grain 激活后调用（State.pm 不为 nil），否则 panic。
 func (s *State[A, D, S, T]) Persist(ctx *actor.ActorContext[A, State[A, D, S, T]]) error {
+	return s.persist(ctx, ctx.Context())
+}
+
+// persist 落盘 + 续租核心实现，使用调用方指定的 context。
+// 退出钩子（OnQuit）场景下 actor ctx 已被取消，须传入不受取消影响的
+// context（context.WithoutCancel），否则 Mongo/Redis 驱动会返回 context canceled，
+// 导致最终状态无法落盘。
+func (s *State[A, D, S, T]) persist(ctx *actor.ActorContext[A, State[A, D, S, T]], c context.Context) error {
 	if s.pm == nil {
 		panic("grain: Persist called without PersistenceManager. " +
 			"Activate the Grain first via State.Activate(ctx, pm) in a spawn/serve handler.")
@@ -115,9 +125,9 @@ func (s *State[A, D, S, T]) Persist(ctx *actor.ActorContext[A, State[A, D, S, T]
 	if snap == nil {
 		// 快照为 nil：本次不存盘（例如状态无变化），但仍续租以保活租约。
 		ctx.Logger().Debug("grain persist: snapshot nil, skip save but renew lease", "id", ctx.Id())
-		return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, nil, gen)
+		return s.pm.driver.Save(c, string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, nil, gen)
 	}
-	return s.pm.driver.Save(ctx.Context(), string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, snap, gen)
+	return s.pm.driver.Save(c, string(ctx.Id().ActorType()), ctx.Id().String(), s.pm.nodeId, snap, gen)
 }
 
 // ─── 生命周期 ───

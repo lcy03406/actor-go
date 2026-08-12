@@ -107,7 +107,6 @@ MainLoop:
 			}
 		}
 	}
-	a.cancel()
 	if ctx == nil {
 		a.g.actorWake(a.id)
 	} else {
@@ -124,6 +123,10 @@ MainLoop:
 	if ctx != nil {
 		ctx.clear()
 	}
+	// OnQuit 钩子（在 ctx.clear 内执行）需要 context 尚未取消才能完成落盘等清理 I/O，
+	// 因此将 cancel 放在 clear 之后。KillActor 场景下 kill() 已提前 cancel 以中断
+	// in-flight handler，取消信号仍会及时传播。
+	a.cancel()
 	a.logger.Info("actor closed")
 }
 

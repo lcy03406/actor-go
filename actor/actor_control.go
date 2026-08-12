@@ -26,9 +26,13 @@ func (a *ActorControl) clear() {
 			delete(a.timers, id)
 		}
 	}
-	if a.cancel != nil {
-		a.cancel()
-	}
+	// 先执行 OnQuit，再取消 ctx：退出钩子（如 grain 退出落盘）需要 context 尚未取消
+	// 才能完成清理 I/O。cancel 用 defer 兜底，即使 OnQuit panic 也能保证 ctx 被取消。
+	defer func() {
+		if a.cancel != nil {
+			a.cancel()
+		}
+	}()
 	if a.OnQuit != nil {
 		defer func() {
 			if r := recover(); r != nil {

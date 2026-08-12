@@ -1,6 +1,8 @@
 package grain
 
 import (
+	"context"
+
 	"github.com/lcy03406/actor-go/actor"
 )
 
@@ -68,11 +70,15 @@ func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 		}
 
 		// 退出钩子：先存盘（nil snapshot 跳过写但仍续租），再释放租约。
+		// 退出路径上 actor ctx 已被取消，落盘/释放租约使用 context.WithoutCancel
+		// 派生的 context，避免 Mongo/Redis 驱动因 context canceled 拒绝写入，
+		// 导致最终状态丢失（grain persist on quit failed）。
 		ctx.Control().PushOnQuit(func() {
-			if err := ctx.State().Persist(ctx); err != nil {
+			quitCtx := context.WithoutCancel(ctx.Context())
+			if err := ctx.State().persist(ctx, quitCtx); err != nil {
 				ctx.Logger().Warn("grain persist on quit failed", "id", ctx.Id(), "err", err)
 			}
-			ctx.State().release(ctx, string(ctx.Id().ActorType()))
+			ctx.State().release(ctx, string(ctx.Id().ActorType()), quitCtx)
 		})
 
 		return nil
