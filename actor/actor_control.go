@@ -109,11 +109,19 @@ func (a *ActorControl) Open() {
 
 // Timer 在指定延迟后向 Actor 自身发送回调，返回可取消的 Timer Id。
 func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
+	if a.timers == nil {
+		a.timers = make(map[TimerId]*time.Timer)
+	}
+	// 从 timerId+1 开始线性探查下一个空位；到达 math.MaxInt 后回绕到 1，
+	// 避免 id++ 溢出到 math.MinInt。若回绕一圈仍无空位（理论上不可能，
+	// 因为 timer 数量恒等于已注册槽位数），则退回 timerId+1 兜底，杜绝无限循环。
 	id := a.timerId + 1
-	for id != a.timerId {
-		_, ok := a.timers[id]
-		if !ok {
-			a.timerId = id
+	if id == math.MaxInt {
+		id = 1
+	}
+	start := id
+	for {
+		if _, ok := a.timers[id]; !ok {
 			break
 		}
 		if id == math.MaxInt {
@@ -121,13 +129,15 @@ func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
 		} else {
 			id++
 		}
+		if id == start {
+			// 整轮探查无空位，强制复用起始位（理论上不可达，仅作防御）。
+			break
+		}
 	}
+	a.timerId = id
 	i := &timerStub{fn, id, nil}
 	timer := time.AfterFunc(d, a.timerFn(i))
 	i.t = timer
-	if a.timers == nil {
-		a.timers = make(map[TimerId]*time.Timer)
-	}
 	a.timers[id] = timer
 	return id
 }
