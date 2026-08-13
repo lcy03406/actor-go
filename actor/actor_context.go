@@ -166,3 +166,8 @@ func (a *ActorContext[A, S]) Timer(d time.Duration, fn func()) TimerId {
 func (a *ActorContext[A, S]) StopTimer(timerId TimerId) bool {
 	return a.ctrl.StopTimer(timerId)
 }
+
+//ControlState 获取Control和State的便捷函数
+func (a *ActorContext[A, S]) ControlState() (*ActorControl, A, *S) {
+	return a.Control(), a.Id(), a.State()
+}

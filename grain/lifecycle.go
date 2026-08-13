@@ -203,3 +203,8 @@ func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.Act
 	ctx.Logger().Info("grain activated (loaded)", "id", id, "generation", lease.Generation)
 	return ActivateLoaded, nil
 }
+
+//ControlState 获取Control和State的便捷函数
+func ControlState[A actor.ActorId, D any, S any, T Snapshotter[D, S]](a *actor.ActorContext[A, State[A, D, S, T]]) (*actor.ActorControl, A, *D) {
+	return a.Control(), a.Id(), &a.State().Data
+}
