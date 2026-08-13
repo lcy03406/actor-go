@@ -24,7 +24,7 @@ func (b *RegistryBuilder[A, S]) SetOnSpawn(on_spawn OnSpawnFn[A, S]) {
 func register[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
 	allow_spawn, allow_query bool,
-	fn handlerFunc[A, S, Q, R, Q0, R0],
+	fn HandlerFunc[A, S, Q, R, Q0, R0],
 ) {
 	reqType := reqTypeOf[A, Q]()
 	b.handlers[reqType] = &handlerEntry[A, S, Q, R, Q0, R0]{
@@ -38,21 +38,21 @@ func register[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0
 // RegisterSpawn 注册 spawn 处理器（首次消息创建 Actor，不等待回复）。
 func RegisterSpawn[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
-	fn handlerFunc[A, S, Q, R, Q0, R0],
+	fn HandlerFunc[A, S, Q, R, Q0, R0],
 ) {
 	register(b, true, false, fn)
 }
 
 func RegisterQuery[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
-	fn handlerFunc[A, S, Q, R, Q0, R0],
+	fn HandlerFunc[A, S, Q, R, Q0, R0],
 ) {
 	register(b, false, true, fn)
 }
 
 func RegisterServe[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](
 	b *RegistryBuilder[A, S],
-	fn handlerFunc[A, S, Q, R, Q0, R0],
+	fn HandlerFunc[A, S, Q, R, Q0, R0],
 ) {
 	register(b, true, true, fn)
 }
@@ -116,4 +116,15 @@ func RegisterServeHandler2[A ActorId, S anyState, Q RequestHandler[A, S, R, Q0, 
 	}
 	register(b, true, true, fn)
 	return typedNil
+}
+
+// HandlerCISFunc 是接受ActorControl的Handler形式
+type HandlerCISFunc[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] func(a *ActorControl, id A, s *S, req Q, spawning bool) (R, error)
+
+// CIS 将handlerCISFunc包装成Handler
+func CIS[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](cis HandlerCISFunc[A, S, Q, R, Q0, R0]) HandlerFunc[A, S, Q, R, Q0, R0] {
+	return func (a *ActorContext[A, S], req Q, spawning bool) (R, error) {
+		c, i, s := a.ControlState()
+		return cis(c, i, s, req, spawning)
+	}
 }

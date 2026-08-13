@@ -352,7 +352,7 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 
 | Register | Handler type | Signature |
 |----------|-------------|-----------|
-| `RegisterSpawn` / `RegisterQuery` / `RegisterServe` | `handlerFunc` | `func(ctx, req, spawning) (R, error)` — passed as argument |
+| `RegisterSpawn` / `RegisterQuery` / `RegisterServe` | `HandlerFunc` | `func(ctx, req, spawning) (R, error)` — passed as argument |
 | `RegisterSpawnHandler` / `RegisterQueryHandler` / `RegisterServeHandler` | `RequestHandler` | `func(req) Handle(ctx, spawning) (R, error)` — method on request type |
 
 **Comparison:**

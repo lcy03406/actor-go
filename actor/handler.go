@@ -2,7 +2,7 @@ package actor
 
 import "iter"
 
-type handlerFunc[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] func(actor *ActorContext[A, S], req Q, spawning bool) (R, error)
+type HandlerFunc[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] func(actor *ActorContext[A, S], req Q, spawning bool) (R, error)
 
 // handler 是擦除具体请求/回复类型的 handler 接口。
 // 允许 registry map 存储不同类型的 handler。
@@ -20,7 +20,7 @@ type handlerBase[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 
 type handlerEntry[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
 	reqType                  string
 	allow_spawn, allow_query bool
-	fn                       handlerFunc[A, S, Q, R, Q0, R0]
+	fn                       HandlerFunc[A, S, Q, R, Q0, R0]
 }
 
 func (h *handlerEntry[A, S, Q, R, Q0, R0]) ReqType() string {

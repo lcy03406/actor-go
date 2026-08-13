@@ -208,3 +208,14 @@ func activate[A actor.ActorId, D any, S any, T Snapshotter[D, S]](ctx *actor.Act
 func ControlState[A actor.ActorId, D any, S any, T Snapshotter[D, S]](a *actor.ActorContext[A, State[A, D, S, T]]) (*actor.ActorControl, A, *D) {
 	return a.Control(), a.Id(), &a.State().Data
 }
+
+// handlerCISFunc 是接受ActorControl的Handler形式
+type HandlerCISFunc[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any] func(a *actor.ActorControl, id A, s *D, req Q, spawning bool) (R, error)
+
+// CIS 将handlerCISFunc包装成Handler
+func CIS[A actor.ActorId, D any, S any, T Snapshotter[D, S], Q actor.Request[A, R, Q0, R0], R actor.PtrReply[R0], Q0 any, R0 any](cis HandlerCISFunc[A, D, S, T, Q, R, Q0, R0]) actor.HandlerFunc[A, State[A, D, S, T], Q, R, Q0, R0] {
+	return func (a *actor.ActorContext[A, State[A, D, S, T]], req Q, spawning bool) (R, error) {
+		c, i, s := ControlState(a)
+		return cis(c, i, s, req, spawning)
+	}
+}

@@ -338,7 +338,7 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 
 | 注册 | 处理器类型 | 签名 |
 |------|-------------|-----------|
-| `RegisterSpawn` / `RegisterQuery` / `RegisterServe` | `handlerFunc` | `func(ctx, req, spawning) (R, error)` —— 作为参数传入 |
+| `RegisterSpawn` / `RegisterQuery` / `RegisterServe` | `HandlerFunc` | `func(ctx, req, spawning) (R, error)` —— 作为参数传入 |
 | `RegisterSpawnHandler` / `RegisterQueryHandler` / `RegisterServeHandler` | `RequestHandler` | `func(req) Handle(ctx, spawning) (R, error)` —— 定义在请求类型上的方法 |
 
 **对比：**
