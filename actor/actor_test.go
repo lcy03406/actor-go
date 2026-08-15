@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -119,7 +120,7 @@ func setupManager(mgr *actor.Manager) {
 
 // TestActorBasic 测试 Actor 的基本功能：spawn、call、post、close。
 func TestActorBasic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	testId := TestActorId{ServerId: 42, OpenId: "4242"}
@@ -153,7 +154,7 @@ func TestActorBasic(t *testing.T) {
 
 // TestActorFinalize 测试 Finalize 广播关闭。
 func TestActorFinalize(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	// 创建多个 Actor
@@ -179,7 +180,7 @@ func TestActorFinalize(t *testing.T) {
 
 // TestActorNotFound 测试 Actor 不存在时的错误处理。
 func TestActorNotFound(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	testId := TestActorId{ServerId: 99, OpenId: "nonexistent"}
@@ -193,7 +194,7 @@ func TestActorNotFound(t *testing.T) {
 
 // TestActorBroadcast 测试广播功能。
 func TestActorBroadcast(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	for i := 0; i < 5; i++ {
@@ -212,7 +213,7 @@ func TestActorBroadcast(t *testing.T) {
 
 // TestActorCallWithinTimeout 测试在超时时间内完成调用的正常路径。
 func TestActorCallWithinTimeout(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	testId := TestActorId{ServerId: 42, OpenId: "timeout_test"}
@@ -235,7 +236,7 @@ func TestActorCallWithinTimeout(t *testing.T) {
 
 // TestActorMulticast 测试多播功能。
 func TestActorMulticast(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestClose](b)
@@ -264,7 +265,7 @@ func TestActorMulticast(t *testing.T) {
 
 // TestActorRequestSpawn 测试 RegisterServe（首次请求创建 Actor 并返回回复）。
 func TestActorRequestSpawn(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterServeHandler[TestActorId, TestActorData, *TestLoginWithReply](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
@@ -295,7 +296,7 @@ func TestActorRequestSpawn(t *testing.T) {
 // TestActorSpawningFlag 测试 spawning 标志的正确性：RegisterServe 首次调用 spawning=true，
 // 对已存在 Actor 再次调用同一 handler 时 spawning=false。
 func TestActorSpawningFlag(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		// 使用 RegisterServeHandler（allow_spawn=true, allow_query=true）才能让 handler
 		// 在 Actor 已存在时也被调用，从而触发 spawning=false 分支。
@@ -330,7 +331,7 @@ func TestActorSpawningFlag(t *testing.T) {
 
 // TestActorCallContextCancel 测试 context 取消时 Call 返回错误。
 func TestActorCallContextCancel(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	testId := TestActorId{ServerId: 42, OpenId: "ctx_cancel"}
@@ -348,7 +349,7 @@ func TestActorCallContextCancel(t *testing.T) {
 
 // TestActorCallTimeoutExceeded 测试超时发生时 Call 返回错误。
 func TestActorCallTimeoutExceeded(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		// 注册一个会延迟的 handler
@@ -370,7 +371,7 @@ func TestActorCallTimeoutExceeded(t *testing.T) {
 
 // TestActorSequentialCalls 测试对同一 Actor 的连续多次 Call。
 func TestActorSequentialCalls(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	testId := TestActorId{ServerId: 42, OpenId: "sequential"}
@@ -396,7 +397,7 @@ func TestActorSequentialCalls(t *testing.T) {
 
 // TestActorHandlerPanic 测试 handler 中发生 panic 时，Call 能收到错误而非让 actor 崩溃。
 func TestActorHandlerPanic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *testPanicAdd](b)
@@ -428,7 +429,7 @@ func TestActorHandlerPanic(t *testing.T) {
 // TestActorConcurrentCalls 测试并发 Call 的串行化保证：
 // 100 个 goroutine 同时 Call 同一 Actor，结果应为 1..100 不重不丢。
 func TestActorConcurrentCalls(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	testId := TestActorId{ServerId: 42, OpenId: "concurrent"}
@@ -474,7 +475,7 @@ func TestActorConcurrentCalls(t *testing.T) {
 
 // TestActorGroupNotFound 测试向未注册 Group 发送消息时的错误处理。
 func TestActorGroupNotFound(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	// 不注册任何 Group，所有操作应返回 GroupNotFoundError
 
 	testId := TestActorId{ServerId: 1, OpenId: "no_group"}
@@ -517,7 +518,7 @@ func TestActorGroupNotFound(t *testing.T) {
 
 // TestActorEmptyMulticast 测试空 ID 列表的 Multicast 返回 (0, nil)。
 func TestActorEmptyMulticast(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	hit, err := actor.Multicast(mgr, []TestActorId{}, &TestClose{})

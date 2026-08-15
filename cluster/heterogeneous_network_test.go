@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -147,7 +148,7 @@ func startHetNode(t *testing.T, nodeID, nodeType, addr string, allKnownNodes []c
 		t.Fatalf("node %s not found in allKnownNodes", nodeID)
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	options100 := actor.Options{BufMails: 100}
 	switch nodeType {
 	case "player-server":

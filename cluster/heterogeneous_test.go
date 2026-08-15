@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -294,7 +295,7 @@ func TestRouter_HeterogeneousCluster_PlayerOnly(t *testing.T) {
 	roomNode := Node{ID: "room-node", Type: "room-server"}
 	mem := newStaticMembership(self, self, roomNode)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[HetPlayerId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[HetPlayerId, string], req *HetPingP, _ bool) (*HetPong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -318,7 +319,7 @@ func TestRouter_HeterogeneousCluster_RoomNotLocal(t *testing.T) {
 	roomNode := Node{ID: "room-node", Type: "room-server"}
 	mem := newStaticMembership(self, self, roomNode)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[HetPlayerId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[HetPlayerId, string], req *HetPingP, _ bool) (*HetPong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -341,7 +342,7 @@ func TestRouter_HeterogeneousCluster_MultiGroupNode(t *testing.T) {
 	chatNode := Node{ID: "chat-node", Type: "chat-server"}
 	mem := newStaticMembership(self, self, chatNode)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[HetPlayerId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[HetPlayerId, string], req *HetPingP, _ bool) (*HetPong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -390,7 +391,7 @@ func TestRouter_HeterogeneousCluster_NoEligibleNode(t *testing.T) {
 	roomNode := Node{ID: "room-node", Type: "room-server"}
 	mem := newStaticMembership(self, self, roomNode)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	placement := NewConsistentHashPlacement(128).WithGroupMapping(testMapping)
 	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, placement, mgr)
 

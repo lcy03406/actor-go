@@ -3,6 +3,7 @@ package actor_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -120,7 +121,7 @@ func setupHandlerManager(mgr *actor.Manager) {
 
 // TestRequestHandlerSpawn 测试 RegisterSpawnHandler：首次消息创建 Actor。
 func TestRequestHandlerSpawn(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "spawn_handler"}
@@ -143,7 +144,7 @@ func TestRequestHandlerSpawn(t *testing.T) {
 
 // TestRequestHandlerQuery 测试 RegisterQueryHandler：查询已存在 Actor。
 func TestRequestHandlerQuery(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "query_handler"}
@@ -169,7 +170,7 @@ func TestRequestHandlerQuery(t *testing.T) {
 
 // TestRequestHandlerServe 测试 RegisterServeHandler：首次消息创建 Actor 并返回回复。
 func TestRequestHandlerServe(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "serve_handler"}
@@ -197,7 +198,7 @@ func TestRequestHandlerServe(t *testing.T) {
 
 // TestRequestHandlerClose 测试通过 RequestHandler 关闭 Actor。
 func TestRequestHandlerClose(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "close_handler"}
@@ -218,7 +219,7 @@ func TestRequestHandlerClose(t *testing.T) {
 
 // TestRequestHandlerWithSafeCall 测试 RequestHandler 与 SafeCall 配合使用。
 func TestRequestHandlerWithSafeCall(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
@@ -253,7 +254,7 @@ func TestRequestHandlerWithSafeCall(t *testing.T) {
 
 // TestRequestHandlerConcurrent 测试并发调用 RequestHandler 的串行化。
 func TestRequestHandlerConcurrent(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "handler_concurrent"}
@@ -292,7 +293,7 @@ func TestRequestHandlerConcurrent(t *testing.T) {
 
 // TestRequestHandlerTimeout 测试 RequestHandler 超时处理。
 func TestRequestHandlerTimeout(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "handler_timeout"}
@@ -312,7 +313,7 @@ func TestRequestHandlerTimeout(t *testing.T) {
 
 // TestRequestHandlerVsRegisterQuery 对比 RequestHandler 和传统 RegisterQuery 两种模式。
 func TestRequestHandlerVsRegisterQuery(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	// 用两种方式注册同一个 ActorType 的不同请求
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[HandlerTestId, HandlerTestState]) {
@@ -352,7 +353,7 @@ func TestRequestHandlerVsRegisterQuery(t *testing.T) {
 
 // TestRequestHandlerBroadcast 测试 RequestHandler 广播。
 func TestRequestHandlerBroadcast(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	// 创建多个 Actor
@@ -383,7 +384,7 @@ func TestRequestHandlerBroadcast(t *testing.T) {
 
 // TestRequestHandlerMulticast 测试 RequestHandler 多播。
 func TestRequestHandlerMulticast(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	ids := make([]HandlerTestId, 4)
@@ -410,7 +411,7 @@ func TestRequestHandlerMulticast(t *testing.T) {
 
 // TestRequestHandlerGroupNotFound 测试未注册 Group 时 RequestHandler 调用返回错误。
 func TestRequestHandlerGroupNotFound(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	id := HandlerTestId{Name: "no_group"}
 
 	err := actor.Post(mgr, id, &HandlerSpawn{InitValue: 0})
@@ -427,7 +428,7 @@ func TestRequestHandlerGroupNotFound(t *testing.T) {
 
 // TestRequestHandlerFinalize 测试 Finalize 与 RequestHandler 配合。
 func TestRequestHandlerFinalize(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	for i := 0; i < 3; i++ {
@@ -457,7 +458,7 @@ func TestRequestHandlerTypeSafety(t *testing.T) {
 	// - 请求类型和 Group 类型不匹配会导致编译错误
 	//
 	// 以下代码能编译通过：
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupHandlerManager(mgr)
 
 	id := HandlerTestId{Name: "type_safe"}

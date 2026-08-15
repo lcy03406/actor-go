@@ -104,7 +104,7 @@ func setupPlayer(mgr *actor.Manager) {
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupPlayer(mgr)
 
 	ctx := context.Background()

@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func newRouter(members ...Node) *Router[DummyMessage, DummyCodec, DummyTransport
 		members = []Node{{ID: "node-1", Addr: "127.0.0.1:8001"}}
 	}
 	mem := newStaticMembership(members[0], members...)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	return NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 }
 
@@ -99,7 +100,7 @@ func newRouterWithManager(members ...Node) (*actor.Manager, *Router[DummyMessage
 		members = []Node{{ID: "node-1", Addr: "127.0.0.1:8001"}}
 	}
 	mem := newStaticMembership(members[0], members...)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	return mgr, router
 }
@@ -267,7 +268,7 @@ func TestRouter_Members(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	node3 := Node{ID: "node-3", Addr: "127.0.0.1:8003"}
 	mem := newStaticMembership(node1, node1, node2, node3)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	members := router.Members()
@@ -324,7 +325,7 @@ func TestRouter_Place(t *testing.T) {
 func TestRouter_Place_EmptyMembers(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 
 	n := router.Place("player", "actor-1")

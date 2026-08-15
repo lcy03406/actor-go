@@ -262,7 +262,7 @@ func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 ### 2. 注册处理器
 
 ```go
-mgr := actor.NewManager()
+mgr := actor.NewManager(slog.Default())
 
 actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
     // RegisterSpawn：首条消息创建 Actor（发后不理）
@@ -533,7 +533,7 @@ defer reply.Close() // 成功时调用方必须关闭
 ### 7. Manager 生命周期
 
 ```go
-mgr := actor.NewManager()
+mgr := actor.NewManager(slog.Default())
 
 // 优雅关闭：停止接收新消息，等待所有 Actor 退出
 mgr.CloseManager()
@@ -557,7 +557,7 @@ actor.JoinActor[PlayerId](mgr, id)    // 等待 Actor 的 goroutine 退出
 ### 服务端
 
 ```go
-mgr := actor.NewManager()
+mgr := actor.NewManager(slog.Default())
 // ... 注册处理器 ...
 
 server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](

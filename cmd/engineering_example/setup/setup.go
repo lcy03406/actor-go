@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -64,7 +65,7 @@ type NodeConfig struct {
 // ─── StartNode ───
 
 func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership, error) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	dataDir := cfg.DataDir
 	if dataDir == "" {

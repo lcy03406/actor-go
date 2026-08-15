@@ -32,7 +32,7 @@ func NewServerWith[M Message, C Codec[M], T Transport[M]](addr string, mgr *acto
 		mgr:      mgr,
 		addr:     addr,
 		entryMap: builder.entryMap,
-		logger:   slog.With("component", "RpcServer"),
+		logger:   mgr.RootLogger().With("component", "RpcServer"),
 	}
 }
 

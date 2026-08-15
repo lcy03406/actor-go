@@ -138,7 +138,7 @@ func main() {
 		grain.WithAutoPersistInterval(5*time.Second),
 	)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupGrainPlayer(mgr, pm)
 
 	ctx := context.Background()

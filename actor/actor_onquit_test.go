@@ -1,6 +1,7 @@
 package actor_test
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -102,7 +103,7 @@ func (req *testOnQuitByKill) Handle(a *actor.ActorContext[TestActorId, TestActor
 // TestOnQuitCalledOnSelfQuit 测试自身调用 Quit 时 OnQuit 被触发。
 func TestOnQuitCalledOnSelfQuit(t *testing.T) {
 	quitCalled := &atomic.Bool{}
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuit](b)
 	})
@@ -122,7 +123,7 @@ func TestOnQuitCalledOnSelfQuit(t *testing.T) {
 func TestOnQuitPushOrder(t *testing.T) {
 	order := []int{}
 	mu := &sync.Mutex{}
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitPush](b)
 	})
@@ -148,7 +149,7 @@ func TestOnQuitPushOrder(t *testing.T) {
 // 且 PushOnQuit 串联的后续回调仍执行。
 func TestOnQuitPanicRecovered(t *testing.T) {
 	afterPanic := &atomic.Bool{}
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitPanic](b)
 	})
@@ -171,7 +172,7 @@ func TestOnQuitPanicRecovered(t *testing.T) {
 func TestOnQuitCalledOnKill(t *testing.T) {
 	quitCalled := &atomic.Bool{}
 	done := make(chan struct{})
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitByKill](b)
 	})
@@ -212,7 +213,7 @@ func (req *testOnQuitSetter) Handle(a *actor.ActorContext[TestActorId, TestActor
 // 退出后才被调用。
 func TestOnQuitNotCalledWhileActive(t *testing.T) {
 	quitCalled := &atomic.Bool{}
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testOnQuitSetter](b)
 	})

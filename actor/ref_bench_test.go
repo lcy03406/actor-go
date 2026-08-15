@@ -3,6 +3,7 @@ package actor_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -140,7 +141,7 @@ func acquireRef(mgr *actor.Manager, targetId RefBenchId) *actor.ActorRef[RefBenc
 
 // BenchmarkCallNoContention 单 Actor 顺序 Call（对照组）。
 func BenchmarkCallNoContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	id := refBenchSpawn(mgr, 1)
 	ctx := context.Background()
@@ -156,7 +157,7 @@ func BenchmarkCallNoContention(b *testing.B) {
 
 // BenchmarkRefCallNoContention 通过持久的 ActorRef 顺序 Call。
 func BenchmarkRefCallNoContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	targetId := refBenchSpawn(mgr, 1)
 	ref := acquireRef(mgr, targetId)
@@ -177,7 +178,7 @@ func BenchmarkRefCallNoContention(b *testing.B) {
 
 // BenchmarkPostNoContention 单 Actor 顺序 Post（对照组）。
 func BenchmarkPostNoContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	id := refBenchSpawn(mgr, 1)
 
@@ -190,7 +191,7 @@ func BenchmarkPostNoContention(b *testing.B) {
 
 // BenchmarkRefPostNoContention 通过持久的 ActorRef 顺序 Post。
 func BenchmarkRefPostNoContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	targetId := refBenchSpawn(mgr, 1)
 	ref := acquireRef(mgr, targetId)
@@ -212,7 +213,7 @@ func BenchmarkRefPostNoContention(b *testing.B) {
 
 // BenchmarkCallWithContention 并发 Call 同一 Actor（对照组）。
 func BenchmarkCallWithContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	id := refBenchSpawn(mgr, 1)
 	ctx := context.Background()
@@ -230,7 +231,7 @@ func BenchmarkCallWithContention(b *testing.B) {
 
 // BenchmarkRefCallWithContention 并发 RefCall 同一 Actor。
 func BenchmarkRefCallWithContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	targetId := refBenchSpawn(mgr, 1)
 	ref := acquireRef(mgr, targetId)
@@ -253,7 +254,7 @@ func BenchmarkRefCallWithContention(b *testing.B) {
 
 // BenchmarkPostWithContention 并发 Post 同一 Actor（对照组）。
 func BenchmarkPostWithContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	id := refBenchSpawn(mgr, 1)
 
@@ -268,7 +269,7 @@ func BenchmarkPostWithContention(b *testing.B) {
 
 // BenchmarkRefPostWithContention 并发 RefPost 同一 Actor。
 func BenchmarkRefPostWithContention(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	targetId := refBenchSpawn(mgr, 1)
 	ref := acquireRef(mgr, targetId)
@@ -288,7 +289,7 @@ func BenchmarkRefPostWithContention(b *testing.B) {
 
 // BenchmarkAcquireAndCall 完整流程：获取 Ref → RefCall → Release（模拟 handler 内临时引用）。
 func BenchmarkAcquireAndCall(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	targetId := refBenchSpawn(mgr, 1)
 	sourceId := refBenchSpawn(mgr, 2)
@@ -307,7 +308,7 @@ func BenchmarkAcquireAndCall(b *testing.B) {
 
 // BenchmarkAcquireAndPost 完整流程：获取 Ref → RefPost → Release。
 func BenchmarkAcquireAndPost(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupRefBenchManager(mgr)
 	targetId := refBenchSpawn(mgr, 1)
 	sourceId := refBenchSpawn(mgr, 2)

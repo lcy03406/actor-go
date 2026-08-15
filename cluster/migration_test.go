@@ -3,6 +3,7 @@ package cluster_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -190,7 +191,7 @@ func TestCheckOwnershipHandler_BusinessLogic(t *testing.T) {
 		{ID: "node-2", Addr: "localhost:8002"},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	// 记录 deactivate 调用
@@ -262,7 +263,7 @@ func TestMigrationCoordinator_Basic(t *testing.T) {
 		self: cluster.Node{ID: "node-1", Addr: "localhost:8001"},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	// 注册 Player Group 的 CheckOwnership
@@ -328,7 +329,7 @@ func TestMigrationCoordinator_MemberLeft(t *testing.T) {
 		},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	var checkOwnershipCalled int32
@@ -397,7 +398,7 @@ func TestMigrationCoordinator_DynamicMembership(t *testing.T) {
 		members: initialMembers,
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	var ownershipResults []string
@@ -477,7 +478,7 @@ func TestMigrationCoordinator_Stop(t *testing.T) {
 		self: cluster.Node{ID: "node-1", Addr: "localhost:8001"},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	coord := cluster.NewMigrationCoordinator(mgr, placement, membership)
@@ -514,7 +515,7 @@ func TestMigrationCoordinator_EventsClosed(t *testing.T) {
 		self: cluster.Node{ID: "node-1", Addr: "localhost:8001"},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	coord := cluster.NewMigrationCoordinator(mgr, placement, membership)
@@ -550,7 +551,7 @@ func TestMigrationCoordinator_MultipleNotifiers(t *testing.T) {
 		self: cluster.Node{ID: "node-1", Addr: "localhost:8001"},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	var count1, count2, count3 int32
@@ -594,7 +595,7 @@ func TestMigrationCoordinator_ConcurrentEvents(t *testing.T) {
 		self: cluster.Node{ID: "node-1", Addr: "localhost:8001"},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	var notifyCount int32
@@ -759,7 +760,7 @@ func TestMigrationCoordinator_HeterogeneousPlacement(t *testing.T) {
 		},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	var checkResults []string
@@ -832,7 +833,7 @@ func TestMigration_BatchCheckOwnership(t *testing.T) {
 		},
 	}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	defer mgr.CloseManager()
 
 	var shouldLeaveCount, shouldStayCount int32

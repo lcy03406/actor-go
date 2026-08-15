@@ -2,6 +2,7 @@ package actor_test
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -335,7 +336,7 @@ func (req *refTestClosedReq) Handle(a *actor.ActorContext[RefTestId, RefTestStat
 
 // TestActorRefBasic 测试 ActorRef 基本功能：获取引用、RefCall。
 func TestActorRefBasic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestGetRefReq](b)
@@ -356,7 +357,7 @@ func TestActorRefBasic(t *testing.T) {
 
 // TestActorRefPost 测试 RefPost 基本功能。
 func TestActorRefPost(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestRefPostReq](b)
@@ -381,7 +382,7 @@ func TestActorRefPost(t *testing.T) {
 
 // TestActorRefNotFound 测试目标 Actor 不存在时 Ref 返回 nil。
 func TestActorRefNotFound(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestRefNotFoundReq](b)
@@ -399,7 +400,7 @@ func TestActorRefNotFound(t *testing.T) {
 
 // TestActorRefRelease 测试 Release 后 Valid 返回 false。
 func TestActorRefRelease(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestReleaseReq](b)
@@ -423,7 +424,7 @@ func TestActorRefRelease(t *testing.T) {
 
 // TestActorRefReleaseIdempotent 测试 Release 幂等性。
 func TestActorRefReleaseIdempotent(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestIdempotentReq](b)
@@ -443,7 +444,7 @@ func TestActorRefReleaseIdempotent(t *testing.T) {
 // Valid() 仍为 true。消息能否送达取决于 handler 注册类型（spawn/query），
 // 与发送方身份无关，此处仅验证 hold 语义。
 func TestActorRefPreventIdleExit(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestPreventExitReq](b)
@@ -464,7 +465,7 @@ func TestActorRefPreventIdleExit(t *testing.T) {
 
 // TestActorRefAfterReleaseAllowsExit 测试 Release 后目标可以正常 idle 退出。
 func TestActorRefAfterReleaseAllowsExit(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestReleaseExitReq](b)
@@ -481,7 +482,7 @@ func TestActorRefAfterReleaseAllowsExit(t *testing.T) {
 
 // TestActorRefId 测试 Id() 返回正确的目标 ActorId。
 func TestActorRefId(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestIdReq](b)
@@ -502,7 +503,7 @@ func TestActorRefId(t *testing.T) {
 
 // TestActorRefCallWithContextCancel 测试 RefCall 的 context 取消。
 func TestActorRefCallWithContextCancel(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestCtxCancelReq](b)
@@ -523,7 +524,7 @@ func TestActorRefCallWithContextCancel(t *testing.T) {
 
 // TestActorRefConcurrent 测试并发使用 ActorRef。
 func TestActorRefConcurrent(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestConcurrentReq](b)
@@ -548,7 +549,7 @@ func TestActorRefConcurrent(t *testing.T) {
 
 // TestActorRefClosedTarget 测试向已关闭的 Actor 获取 Ref 返回 nil。
 func TestActorRefClosedTarget(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RefTestId, RefTestState]) {
 		registerRefTestBase(b)
 		actor.RegisterQueryHandler[RefTestId, RefTestState, *refTestClosedReq](b)

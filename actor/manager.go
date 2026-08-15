@@ -12,28 +12,34 @@ import (
 // Manager 是 Actor 系统的顶层管理器，是多个 Group 的集合。
 // 每个 Group 对应一组 (ActorId, State) 类型对，通过 Serve 函数注册。
 type Manager struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	stopping atomic.Bool
-	joined   atomic.Bool
-	groups   map[ActorType]groupErased
-	logger   *slog.Logger
+	ctx        context.Context
+	cancel     context.CancelFunc
+	stopping   atomic.Bool
+	joined     atomic.Bool
+	groups     map[ActorType]groupErased
+	rootLogger *slog.Logger
+	logger     *slog.Logger
 }
 
 // NewManager 创建一个新的 Manager。
-func NewManager() *Manager {
+func NewManager(logger *slog.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		ctx:    ctx,
-		cancel: cancel,
-		groups: make(map[ActorType]groupErased),
-		logger: slog.With("component", "ActorManager"),
+		ctx:        ctx,
+		cancel:     cancel,
+		groups:     make(map[ActorType]groupErased),
+		rootLogger: logger,
+		logger:     logger.With("component", "ActorManager"),
 	}
 }
 
 // Clear 清除所有注册的 Actor 类型（用于测试）。
 func (m *Manager) Clear() {
 	m.groups = make(map[ActorType]groupErased)
+}
+
+func (m *Manager) RootLogger() *slog.Logger {
+	return m.rootLogger
 }
 
 // Logger 返回 Manager 的日志记录器。

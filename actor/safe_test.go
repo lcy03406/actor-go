@@ -2,6 +2,7 @@ package actor_test
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -95,7 +96,7 @@ func setupSafeManager(mgr *actor.Manager) {
 
 // TestSafeCallBasic 测试 SafeCall 正常路径：获取 reply 并验证资源未被自动释放。
 func TestSafeCallBasic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 
@@ -131,7 +132,7 @@ func TestSafeCallBasic(t *testing.T) {
 
 // TestSafeCallCleanupOnTimeout 测试 SafeCall 超时时 reply 被自动清理（Close）。
 func TestSafeCallCleanupOnTimeout(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 
@@ -164,7 +165,7 @@ func TestSafeCallCleanupOnTimeout(t *testing.T) {
 
 // TestSafeCallCleanupOnContextCancel 测试 context 取消时 reply 被自动清理。
 func TestSafeCallCleanupOnContextCancel(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 
@@ -194,7 +195,7 @@ func TestSafeCallCleanupOnContextCancel(t *testing.T) {
 
 // TestSafeCallCleanupNotCalledOnSuccess 验证正常路径下 clean 不被触发。
 func TestSafeCallCleanupNotCalledOnSuccess(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 
@@ -223,7 +224,7 @@ func TestSafeCallCleanupNotCalledOnSuccess(t *testing.T) {
 
 // TestSafeCallConcurrent 测试并发 SafeCall 的串行化保证。
 func TestSafeCallConcurrent(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 
@@ -263,7 +264,7 @@ func TestSafeCallConcurrent(t *testing.T) {
 
 // TestSafeCallGroupNotFound 测试未注册 Group 时 SafeCall 返回错误。
 func TestSafeCallGroupNotFound(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	id := SafeTestId{Name: "no_group"}
 	ctx := context.Background()
 	_, err := actor.SafeCall(ctx, mgr, id, &SafeTestAdd{Add: 1})
@@ -274,7 +275,7 @@ func TestSafeCallGroupNotFound(t *testing.T) {
 
 // TestSafeCallCloseIdempotent 测试多次 Close 幂等。
 func TestSafeCallCloseIdempotent(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 
@@ -304,7 +305,7 @@ func TestSafeCallCloseIdempotent(t *testing.T) {
 // TestSafeCallVsCall 对比 SafeCall 和 Call：SafeCall 需要 reply 实现 SafeReply，
 // Call 使用 PtrReply 不需要 Close。两者在功能上等价但 SafeCall 提供资源安全保证。
 func TestSafeCallVsCall(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 
 	// 注册两个 Group：Safe 版本和普通版本
@@ -459,7 +460,7 @@ func setupRefSafeManager(mgr *actor.Manager) {
 // TestRefSafeCallBasic 测试 RefSafeCall 编译正确性。
 // 实际的跨 Actor 调用测试见 TestRefSafeCallCrossActor。
 func TestRefSafeCallBasic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupRefSafeManager(mgr)
 
@@ -483,7 +484,7 @@ func TestRefSafeCallBasic(t *testing.T) {
 
 // TestRefSafeCallCrossActor 测试通过 ActorRef 的 SafeCall（跨 Actor 引用）。
 func TestRefSafeCallCrossActor(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupRefSafeManager(mgr)
 
@@ -517,7 +518,7 @@ func TestRefSafeCallCrossActor(t *testing.T) {
 
 // TestRefSafeCallCleanupOnTimeout 测试 RefSafeCall 超时时 reply 自动清理（通过跨引用）。
 func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 
 	// 注册两个 handler：一个正常获取，一个慢获取（用于超时）
@@ -558,7 +559,7 @@ func TestRefSafeCallCleanupOnTimeout(t *testing.T) {
 
 // TestRefSafeCallClosedActor 测试向已关闭 Actor 发送 RefSafeCall 返回错误（通过跨引用）。
 func TestRefSafeCallClosedActor(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupRefSafeManager(mgr)
 
@@ -609,7 +610,7 @@ func TestSafeCallTypeSafety(t *testing.T) {
 	// - TestAddReply 不实现 SafeReply（没有 Close() 方法）
 	//
 	// 以下代码能编译通过：
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	var cleaned atomic.Bool
 	setupSafeManager(mgr)
 

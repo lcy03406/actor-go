@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"testing"
@@ -73,7 +74,7 @@ func (*TestRpcClose) ReqType(_ TestRpcId, _ actor.OkReply) string { return "Test
 func setupRPCServer(t *testing.T) (*testServer, *actor.Manager, int) {
 	t.Helper()
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
 			a.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -200,7 +201,7 @@ func TestRPCCall(t *testing.T) {
 // TestRPCCallSpawn 测试远程 Call 触发 spawn（RequestSpawn 模式）。
 func TestRPCCallSpawn(t *testing.T) {
 	// 使用带 RequestSpawn 的服务端
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterServe(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLoginWithReply, spawning bool) (*TestRpcAddReply, error) {
 			a.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -261,7 +262,7 @@ func TestRPCCallTimeout(t *testing.T) {
 // TestRPCCallTimeoutExceeded 测试超时发生时 Call 返回错误。
 func TestRPCCallTimeoutExceeded(t *testing.T) {
 	// 使用带延迟 handler 的服务端
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestRpcId, TestRpcState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[TestRpcId, TestRpcState], req *TestRpcLogin, spawning bool) (actor.OkReply, error) {
 			a.Open() // spawn 后保持活跃（框架不再自动激活）

@@ -2,6 +2,7 @@ package actor_test
 
 import (
 	"context"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,7 +86,7 @@ func (req *testLoginTimer) Handle(a *actor.ActorContext[TestActorId, TestActorDa
 
 // TestActorTimer 测试定时器功能。
 func TestActorTimer(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testTimerLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
@@ -107,7 +108,7 @@ func TestActorTimer(t *testing.T) {
 
 // TestActorTimerCancel 测试取消定时器。
 func TestActorTimerCancel(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testTimerCancelLogin](b)
 		actor.RegisterQueryHandler[TestActorId, TestActorData, *TestAdd](b)
@@ -130,7 +131,7 @@ func TestActorTimerCancel(t *testing.T) {
 // TestTimerCancelledOnQuit 测试自身退出（Quit）时定时器被取消，回调不触发。
 func TestTimerCancelledOnQuit(t *testing.T) {
 	var timerFired atomic.Bool
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
 		// handler 设置定时器后调用 Quit，定时器应被取消
@@ -162,7 +163,7 @@ func TestTimerCancelledOnQuit(t *testing.T) {
 func TestTimerCancelledOnClose(t *testing.T) {
 	var timerFired atomic.Bool
 	spawnDone := make(chan struct{})
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testLoginTimer](b)
 	})
@@ -190,7 +191,7 @@ func TestTimerCancelledOnClose(t *testing.T) {
 func TestTimerCancelledOnKill(t *testing.T) {
 	var timerFired atomic.Bool
 	spawnDone := make(chan struct{})
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *testLoginTimer](b)
 	})

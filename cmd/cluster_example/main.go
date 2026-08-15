@@ -42,6 +42,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -246,7 +247,7 @@ func main() {
 var options100 = actor.Options{BufMails: 100}
 
 func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Router {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	// 根据节点类型注册 Actor Group
 	switch nodeType {

@@ -85,7 +85,7 @@ func NewMigrationCoordinator(mgr *actor.Manager, placement PlacementStrategy, me
 		mgr:        mgr,
 		placement:  placement,
 		membership: membership,
-		logger:     slog.With("component", "MigrationCoordinator"),
+		logger:     mgr.RootLogger().With("component", "MigrationCoordinator"),
 	}
 }
 

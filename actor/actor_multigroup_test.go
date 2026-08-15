@@ -3,6 +3,7 @@ package actor_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	"github.com/lcy03406/actor-go/actor"
@@ -61,7 +62,7 @@ func (req *TestReset) Handle(a *actor.ActorContext[TestActorId2, TestActorData2]
 
 // TestMultiGroup 测试同一 Manager 管理多个不同 Group。
 func TestMultiGroup(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	// 注册 Group1：TestActorId + TestActorData
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
@@ -122,7 +123,7 @@ func TestMultiGroup(t *testing.T) {
 // TestMultiGroupTypeSafety 验证多 Group 下编译期类型安全：错误的类型组合会被编译器拒绝。
 // 此测试不包含会编译失败的代码，而是验证正确类型组合能正常工作。
 func TestMultiGroupTypeSafety(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)

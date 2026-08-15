@@ -274,7 +274,7 @@ func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 ### 2. Register Handlers
 
 ```go
-mgr := actor.NewManager()
+mgr := actor.NewManager(slog.Default())
 
 actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
     // RegisterSpawn: first message creates the Actor (fire-and-forget)
@@ -586,7 +586,7 @@ defer reply.Close() // caller must close on success
 ### 7. Manager Lifecycle
 
 ```go
-mgr := actor.NewManager()
+mgr := actor.NewManager(slog.Default())
 
 // Graceful shutdown: stop accepting new messages, wait for all Actors to exit
 mgr.CloseManager()
@@ -610,7 +610,7 @@ Remote Actor communication over WebSocket with JSON codec.
 ### Server
 
 ```go
-mgr := actor.NewManager()
+mgr := actor.NewManager(slog.Default())
 // ... register handlers ...
 
 server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](

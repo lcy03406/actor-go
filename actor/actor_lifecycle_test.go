@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func (req *testPanicAdd) Handle(a *actor.ActorContext[TestActorId, TestActorData
 
 // TestCloseActorBasic 测试 CloseActor/JoinActor 的返回值：存在返回 true，不存在返回 false。
 func TestCloseActorBasic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	id := TestActorId{ServerId: 1, OpenId: "close_basic"}
@@ -130,7 +131,7 @@ func TestCloseActorBasic(t *testing.T) {
 
 // TestKillActorBasic 测试 KillActor 的返回值：存在返回 true，不存在返回 false。
 func TestKillActorBasic(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	id := TestActorId{ServerId: 1, OpenId: "kill_basic"}
@@ -161,7 +162,7 @@ var options100 actor.Options = actor.Options{
 
 // TestCloseActorGraceful 测试温和关闭：in-flight handler 不被打断，正常完成。
 func TestCloseActorGraceful(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
@@ -206,7 +207,7 @@ func TestCloseActorGraceful(t *testing.T) {
 
 // TestKillActorInterrupts 测试强制关闭：cancel ctx 中断 in-flight handler 中监听 ctx.Done 的操作。
 func TestKillActorInterrupts(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
@@ -252,7 +253,7 @@ func TestKillActorInterrupts(t *testing.T) {
 // TestCloseActorDrainsMailbox 测试温和关闭后排队消息以 ActorClosedError 失败，
 // 而 in-flight handler 仍正常完成。
 func TestCloseActorDrainsMailbox(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
@@ -329,7 +330,7 @@ func TestCloseActorDrainsMailbox(t *testing.T) {
 
 // TestRespawnAfterClose 测试 CloseActor + JoinActor 后可重新 spawn 同一 ID 的 Actor。
 func TestRespawnAfterClose(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	id := TestActorId{ServerId: 1, OpenId: "respawn"}
@@ -370,7 +371,7 @@ func TestRespawnAfterClose(t *testing.T) {
 // TestCloseJoinManager 测试 Manager 级别的关闭与等待：
 // IsClosed、CloseManager 幂等、JoinManager 等待 in-flight handler 完成后才返回、退出后新消息失败。
 func TestCloseJoinManager(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	handlerDone := make(chan struct{})
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
@@ -447,7 +448,7 @@ func TestCloseJoinManager(t *testing.T) {
 // TestQuitExitsAtEndOfMessage 测试 Quit（自身发起）：当前消息正常完成，在当前消息结束时退出，
 // 退出后后续消息以 ActorClosedError 失败。
 func TestQuitExitsAtEndOfMessage(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	id := TestActorId{ServerId: 1, OpenId: "quit_self"}
@@ -480,7 +481,7 @@ func TestQuitExitsAtEndOfMessage(t *testing.T) {
 // TestKillDrainsMailbox 测试 Kill（外部强制关闭）：中断 in-flight handler，
 // 并排空 mailbox 中排队消息以 ActorClosedError 失败。
 func TestKillDrainsMailbox(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	handlerStart := make(chan struct{})
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[TestActorId, TestActorData]) {
 		actor.RegisterSpawnHandler[TestActorId, TestActorData, *TestLogin](b)
@@ -554,7 +555,7 @@ func TestKillDrainsMailbox(t *testing.T) {
 
 // TestActorRespawnAfterKill 测试 KillActor + JoinActor 后可重新 spawn 同一 ID 的 Actor。
 func TestActorRespawnAfterKill(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
 	id := TestActorId{ServerId: 1, OpenId: "respawn_kill"}
@@ -594,7 +595,7 @@ func TestActorRespawnAfterKill(t *testing.T) {
 
 // TestActorFinalizeWithInFlight 测试 Finalize 在 Actor 有 in-flight handler 时正确等待。
 func TestActorFinalizeWithInFlight(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	handlerStart := make(chan struct{})
 	handlerDone := make(chan struct{})
 

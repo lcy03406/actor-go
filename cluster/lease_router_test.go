@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestIsLeaseTaken_FmtWrap(t *testing.T) {
 func TestRouter_WithLeaseRetry(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	r := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr,
 		WithLeaseRetry(true),
@@ -111,7 +112,7 @@ func TestRouter_WithLeaseRetry(t *testing.T) {
 func TestRouter_WithForceReleaser(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	releaser := &mockLeaseReleaser{returnGen: 1}
 
 	r := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr,
@@ -128,7 +129,7 @@ func TestRouter_WithForceReleaser(t *testing.T) {
 func TestRouter_DefaultNoLeaseRetry(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	r := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr)
 	if r.cfg.LeaseRetry || r.cfg.ForceReleaser != nil {
@@ -142,7 +143,7 @@ func TestRouter_CallNormal(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -172,7 +173,7 @@ func TestRouter_PostNormal(t *testing.T) {
 	mem := newStaticMembership(node1, node1)
 
 	var received string
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -204,7 +205,7 @@ func TestRouter_CallWithForceReleaser_Normal(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, _ bool) (*LeasePong, error) {
 			ctx.Open() // spawn 后保持活跃（框架不再自动激活）
@@ -242,7 +243,7 @@ func TestRouter_LeaseTakenTriggersForceRelease(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, spawning bool) (*LeasePong, error) {
 			if spawning {
@@ -288,7 +289,7 @@ func TestRouter_LeaseRetryNoForceReleaser(t *testing.T) {
 	node2 := Node{ID: "node-2", Addr: "127.0.0.1:8002"}
 	mem := newStaticMembership(node1, node1, node2)
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options10, func(b *actor.RegistryBuilder[LeaseTestId, string]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[LeaseTestId, string], req *LeasePing, spawning bool) (*LeasePong, error) {
 			if spawning {
@@ -329,7 +330,7 @@ func TestRouter_LeaseRetryNoForceReleaser(t *testing.T) {
 func TestRouter_CloseWithForceReleaser(t *testing.T) {
 	node1 := Node{ID: "node-1", Addr: "127.0.0.1:8001"}
 	mem := newStaticMembership(node1, node1)
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	router := NewRouter[DummyMessage, DummyCodec, DummyTransport](mem, NewConsistentHashPlacement(128), mgr,
 		WithForceReleaser(&mockLeaseReleaser{returnGen: 1}),

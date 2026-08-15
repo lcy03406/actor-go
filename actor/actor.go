@@ -27,7 +27,7 @@ func newActor[A ActorId, S anyState](id A, g *group[A, S], options Options) *act
 		cancel:  cancel,
 		id:      id,
 		g:       g,
-		logger:  slog.With("actor", id.String()),
+		logger:  g.logger.With("actor", id.String()),
 		mailbox: make(chan invokable[A, S], options.BufMails),
 		doneCh:  make(chan struct{}),
 	}

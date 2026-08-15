@@ -76,7 +76,7 @@ func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 // ─── Server ───
 
 func runServer(addr string) (*JsonServer, *actor.Manager) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {

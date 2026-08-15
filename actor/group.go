@@ -40,7 +40,7 @@ type group[A ActorId, S anyState] struct {
 func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A], on_spawn OnSpawnFn[A, S], options Options) *group[A, S] {
 	ctx, cancel := context.WithCancel(m.ctx)
 	actorType := actorTypeOf[A]()
-	logger := slog.With("group", actorType)
+	logger := m.rootLogger.With("actorType", actorType)
 	return &group[A, S]{
 		ctx:      ctx,
 		cancel:   cancel,

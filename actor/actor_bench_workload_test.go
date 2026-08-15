@@ -3,6 +3,7 @@ package actor_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 
@@ -50,7 +51,7 @@ func fib(n int) int {
 // BenchmarkV2CallCPUWorkload 单 Actor Call 含 CPU 密集型计算（斐波那契 fib(20)）。
 // 测试 handler 中有实际计算开销时的吞吐量。
 func BenchmarkV2CallCPUWorkload(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			*a.State() = WorkloadState{Value: req.Init, Data: make(map[string]int)}
@@ -86,7 +87,7 @@ func (*StrProcReq) ReqType(_ WorkloadId, _ *StrProcReply) string { return "StrPr
 
 // BenchmarkV2CallStringWorkload 单 Actor Call 含字符串处理（反转、分词计数）。
 func BenchmarkV2CallStringWorkload(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.State().Value = req.Init
@@ -144,7 +145,7 @@ func (*MapOpsReq) ReqType(_ WorkloadId, _ *MapOpsReply) string { return "MapOpsR
 
 // BenchmarkV2CallMapWorkload 单 Actor Call 含 Map 操作（插入/查找/删除）。
 func BenchmarkV2CallMapWorkload(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			*a.State() = WorkloadState{Value: req.Init, Data: make(map[string]int)}
@@ -286,7 +287,7 @@ func setupGameManagerV2(mgr *actor.Manager) {
 // 32 个玩家 Actor，并发执行移动、攻击、治疗、查询操作的混合负载。
 func BenchmarkV2GameServerScenario(b *testing.B) {
 	const numPlayers = 32
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupGameManagerV2(mgr)
 	ctx := context.Background()
 
@@ -398,7 +399,7 @@ func setupChatManagerV2(mgr *actor.Manager) {
 // BenchmarkV2ChatRoomScenario 模拟聊天室场景：
 // 单个聊天室 Actor，成员加入/离开/发消息/查询的混合负载。
 func BenchmarkV2ChatRoomScenario(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	setupChatManagerV2(mgr)
 	ctx := context.Background()
 
@@ -493,7 +494,7 @@ func (*EOrderGetTotalReq) ReqType(_ EOrderId, _ *EOrderGetTotalReply) string {
 // BenchmarkV2ECommerceScenario 模拟电商订单场景。
 func BenchmarkV2ECommerceScenario(b *testing.B) {
 	const numOrders = 32
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[EOrderId, EOrderState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[EOrderId, EOrderState], req *EOrderCreateReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(EOrderState{Status: "open"})
@@ -560,7 +561,7 @@ func BenchmarkV2ECommerceScenario(b *testing.B) {
 
 // BenchmarkV2ActorLifecycle 测试 Actor 完整生命周期吞吐：spawn → work → close。
 func BenchmarkV2ActorLifecycle(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init, Data: make(map[string]int)})
@@ -595,7 +596,7 @@ func BenchmarkV2ActorLifecycle(b *testing.B) {
 // BenchmarkV2MixedWorkload 混合 Post + Call + Broadcast 并发负载。
 func BenchmarkV2MixedWorkload(b *testing.B) {
 	const numActors = 50
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	var recv atomic.Int64
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
@@ -657,7 +658,7 @@ func BenchmarkV2MixedWorkload(b *testing.B) {
 // 用于隔离 Spawn 写锁对并行吞吐的影响。
 func BenchmarkV2MixedWorkloadNoSpawn(b *testing.B) {
 	const numActors = 50
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	var recv atomic.Int64
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
@@ -718,7 +719,7 @@ func BenchmarkV2MixedWorkloadNoSpawn(b *testing.B) {
 func BenchmarkV2MixedWorkloadChurn(b *testing.B) {
 	const numActors = 100
 	const requestsBeforeQuit = 50
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 
 	var recv atomic.Int64
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
@@ -828,7 +829,7 @@ func (*GrowQueryReq) ReqType(_ GrowStateId, _ *GrowQueryReply) string { return "
 
 // BenchmarkV2StatefulGrowingWorkload 测试 Actor 状态持续增长时的性能表现。
 func BenchmarkV2StatefulGrowingWorkload(b *testing.B) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[GrowStateId, GrowState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[GrowStateId, GrowState], req *GrowSpawnReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(GrowState{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ var errOnSpawn = errors.New("on-spawn-init-failed")
 func TestOnSpawnCalledOnceOnCreate(t *testing.T) {
 	var calls atomic.Int32
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			calls.Add(1)
@@ -121,7 +122,7 @@ func TestOnSpawnCalledOnceOnCreate(t *testing.T) {
 func TestOnSpawnNotCalledOnExistingActor(t *testing.T) {
 	var calls atomic.Int32
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			calls.Add(1)
@@ -160,7 +161,7 @@ func TestOnSpawnErrorAbortsCreation(t *testing.T) {
 	var calls atomic.Int32
 	fail := atomic.Bool{}
 
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			calls.Add(1)
@@ -211,7 +212,7 @@ func TestOnSpawnErrorAbortsCreation(t *testing.T) {
 // TestOnSpawnCanOpenActor 验证 OnSpawn 内部调用 Open() 可使 Actor 保持活跃，
 // 即使随后的 spawn handler 未调用 Open() 也如此。
 func TestOnSpawnCanOpenActor(t *testing.T) {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[onSpawnId, onSpawnState]) {
 		b.SetOnSpawn(func(a *actor.ActorContext[onSpawnId, onSpawnState]) error {
 			a.Open() // 在 OnSpawn 中激活 Actor

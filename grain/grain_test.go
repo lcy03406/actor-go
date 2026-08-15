@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -104,11 +105,11 @@ func activatingSpawn[Q any, R any](
 }
 
 // setupManager 创建 manager 并按给定注册函数注册一组 grain handler，
-// 消除各测试中重复的 `actor.NewManager()` + `actor.Serve(...)` 包裹样板。
+// 消除各测试中重复的 `actor.NewManager(slog.Default())` + `actor.Serve(...)` 包裹样板。
 func setupManager[S any, P any, K Snapshotter[S, P]](
 	register func(b *actor.RegistryBuilder[TestGrainId, State[TestGrainId, S, P, K]]),
 ) *actor.Manager {
-	mgr := actor.NewManager()
+	mgr := actor.NewManager(slog.Default())
 	actor.Serve(mgr, actor.Options{BufMails: 100}, register)
 	return mgr
 }
