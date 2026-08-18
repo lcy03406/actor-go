@@ -161,59 +161,46 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 
 // CPost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
 func CPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
-	traceLog(a.traceSend, a.logger, "send post", id, req)
+	traceLogSend(a.traceSend, a.logger, "send post", id, reqTypeOf(req), req)
 	return Post(a.Manager(), id, req)
 }
 
 // CCall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
 func CCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (R, error) {
-	traceLog(a.traceSend, a.logger, "send call", id, req)
+	traceLogSend(a.traceSend, a.logger, "send call", id, reqTypeOf(req), req)
 	ctx := a.Context()
 	mgr := a.Manager()
 	rep, err := Call(ctx, mgr, id, req)
-	traceLog(a.traceSend, a.logger, "got reply", id, rep)
+	traceLogRecv(a.traceSend, a.logger, "recv reply", id, reqTypeOf(req), rep)
 	return rep, err
 }
 
 // CBroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
 func CBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, req Q) (int, error) {
-	traceLog(a.traceSend, a.logger, "broadcast", nil, req)
+	traceLogSend(a.traceSend, a.logger, "send broadcast", nil, reqTypeOf(req), req)
 	mgr := a.Manager()
 	return Broadcast(mgr, req)
 }
 
 // CMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func CMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
-	traceLog(a.traceSend, a.logger, "multicast", ids, req)
+	traceLogSend(a.traceSend, a.logger, "multicast", ids, reqTypeOf(req), req)
 	mgr := a.Manager()
-	return MulticastIter(mgr, slices.Values(ids), req)
+	return MulticastIter(mgr, Seq[A](slices.Values(ids)), req)
 }
 
 // CMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func CMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) (int, error) {
-	keys := maps.Keys(ids)
-	traceLog(a.traceSend, a.logger, "multicast", keys, req)
+	keys := Seq[A](maps.Keys(ids))
+	traceLogSend(a.traceSend, a.logger, "multicast", keys, reqTypeOf(req), req)
 	mgr := a.Manager()
 	return MulticastIter(mgr, keys, req)
 }
 
 // CMulticastValues 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func CMulticastValues[X comparable, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[X]A, req Q) (int, error) {
-	keys := maps.Values(ids)
-	traceLog(a.traceSend, a.logger, "multicast", keys, req)
+	keys := Seq[A](maps.Values(ids))
+	traceLogSend(a.traceSend, a.logger, "multicast", keys, reqTypeOf(req), req)
 	mgr := a.Manager()
-	return MulticastIter(mgr, maps.Values(ids), req)
-}
-
-func traceLog(option TraceOption, logger *slog.Logger, title string, to any, req any) {
-	switch option {
-	case TraceNone:
-		return
-	case TraceHead:
-		logger.Info(title, "to", to)
-	case TraceBrief:
-		fallthrough
-	case TraceVerbose:
-		logger.Info(title, "to", to, "req", req)
-	}
+	return MulticastIter(mgr, keys, req)
 }

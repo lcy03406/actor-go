@@ -26,7 +26,8 @@ func register[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0
 	allow_spawn, allow_query bool,
 	fn HandlerFunc[A, S, Q, R, Q0, R0],
 ) {
-	reqType := reqTypeOf[A, Q]()
+	var nilQ Q
+	reqType := reqTypeOf(nilQ)
 	b.handlers[reqType] = &handlerEntry[A, S, Q, R, Q0, R0]{
 		reqType:     reqType,
 		allow_spawn: allow_spawn,
@@ -123,7 +124,7 @@ type HandlerCISFunc[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R
 
 // CIS 将handlerCISFunc包装成Handler
 func CIS[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](cis HandlerCISFunc[A, S, Q, R, Q0, R0]) HandlerFunc[A, S, Q, R, Q0, R0] {
-	return func (a *ActorContext[A, S], req Q, spawning bool) (R, error) {
+	return func(a *ActorContext[A, S], req Q, spawning bool) (R, error) {
 		c, i, s := a.ControlState()
 		return cis(c, i, s, req, spawning)
 	}

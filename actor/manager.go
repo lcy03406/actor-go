@@ -2,7 +2,6 @@ package actor
 
 import (
 	"context"
-	"iter"
 	"log/slog"
 	"maps"
 	"slices"
@@ -200,21 +199,21 @@ func Broadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 an
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) (int, error) {
-	return MulticastIter(mgr, slices.Values(ids), req)
+	return MulticastIter(mgr, Seq[A](slices.Values(ids)), req)
 }
 
 // MulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func MulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids map[A]X, req Q) (int, error) {
-	return MulticastIter(mgr, maps.Keys(ids), req)
+	return MulticastIter(mgr, Seq[A](maps.Keys(ids)), req)
 }
 
 // MulticastValues 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func MulticastValues[X comparable, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids map[X]A, req Q) (int, error) {
-	return MulticastIter(mgr, maps.Values(ids), req)
+	return MulticastIter(mgr, Seq[A](maps.Values(ids)), req)
 }
 
 // MulticastIter 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func MulticastIter[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids iter.Seq[A], req Q) (int, error) {
+func MulticastIter[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids Seq[A], req Q) (int, error) {
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {

@@ -2,7 +2,6 @@ package actor
 
 import (
 	"context"
-	"iter"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -137,7 +136,7 @@ func (g *group[A, S]) resolveActor(id A, allow_spawn bool) *actorRuntime[A, S] {
 	return actor
 }
 
-func (g *group[A, S]) holdActors(ids iter.Seq[A]) []*actorRuntime[A, S] {
+func (g *group[A, S]) holdActors(ids Seq[A]) []*actorRuntime[A, S] {
 	values := make([]*actorRuntime[A, S], 0)
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -185,7 +184,7 @@ func (g *group[A, S]) broadcast(m invokable[A, S]) (int, error) {
 	return count, nil
 }
 
-func (g *group[A, S]) multicast(ids iter.Seq[A], m invokable[A, S]) (int, error) {
+func (g *group[A, S]) multicast(ids Seq[A], m invokable[A, S]) (int, error) {
 	if g.stopping.Load() {
 		return 0, nil
 	}
@@ -279,11 +278,11 @@ func (g *group[A, S]) joinActor(id A) bool {
 	return true
 }
 
-func (g *group[A, S]) actorIdle(id A) {
+func (g *group[A, S]) actorIdle(_ A) {
 	g.idle.Add(1)
 }
 
-func (g *group[A, S]) actorWake(id A) {
+func (g *group[A, S]) actorWake(_ A) {
 	g.idle.Add(-1)
 }
 

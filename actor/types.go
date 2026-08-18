@@ -74,9 +74,9 @@ type RequestHandler[A ActorId, S anyState, R PtrReply[R0], Q0 any, R0 any] inter
 	Handle(actor *ActorContext[A, S], spawning bool) (R, error)
 }
 
-func reqTypeOf[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any]() string {
+func reqTypeOf[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](nilQ Q) string {
 	var id A
-	return Q.ReqType(nil, id, nil)
+	return nilQ.ReqType(id, nil)
 }
 
 // Ok 是表示"成功"的通用回复，等同于 struct{}。
