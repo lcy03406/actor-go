@@ -47,6 +47,7 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning 
 		traceLogSend(traceRecv, actor.Logger(), "send reply", nil, reqTypeOf(i.req), rep)
 		i.ch <- result[R, R0]{rep, err}
 	}
+	traceLogRecv(traceRecv, actor.Logger(), "recv return", nil, reqTypeOf(i.req), nil)
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) Fail(err error) {
