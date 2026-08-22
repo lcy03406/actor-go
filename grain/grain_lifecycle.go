@@ -51,11 +51,13 @@ func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 	b.SetOnSpawn(func(ctx *actor.ActorContext[A, State[A, S, P, K]]) error {
 		created, err := ctx.State().Activate(ctx, pm)
 		if err != nil {
+			ctx.Logger().Warn("grain activate failed", "err", err)
 			return err
 		}
 
 		if onActivate != nil {
 			if err := onActivate(ctx, created == ActivateCreated); err != nil {
+				ctx.Logger().Warn("grain onActivate failed", "err", err)
 				return err
 			}
 		}
@@ -64,7 +66,7 @@ func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 		if pm != nil && pm.persistInterval > 0 {
 			ctx.Timer(pm.persistInterval, func() {
 				if err := ctx.State().Persist(ctx); err != nil {
-					ctx.Logger().Warn("grain auto persist failed", "id", ctx.Id(), "err", err)
+					ctx.Logger().Warn("grain auto persist failed", "err", err)
 				}
 			})
 		}
@@ -76,7 +78,7 @@ func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 		ctx.Control().PushOnQuit(func() {
 			quitCtx := context.WithoutCancel(ctx.Context())
 			if err := ctx.State().persist(ctx, quitCtx); err != nil {
-				ctx.Logger().Warn("grain persist on quit failed", "id", ctx.Id(), "err", err)
+				ctx.Logger().Warn("grain persist on quit failed", "err", err)
 			}
 			ctx.State().release(ctx, string(ctx.Id().ActorType()), quitCtx)
 		})
