@@ -157,14 +157,14 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 	return true
 }
 
-// CPost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
-func CPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
+// APost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
+func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
 	traceLogSend(a.traceSend, a.logger, "send post", id, reqTypeOf(req), req)
 	return Post(a.Manager(), id, req)
 }
 
-// CCall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
-func CCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (R, error) {
+// ACall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
+func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (R, error) {
 	traceLogSend(a.traceSend, a.logger, "send call", id, reqTypeOf(req), req)
 	ctx := a.Context()
 	mgr := a.Manager()
@@ -173,22 +173,22 @@ func CCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a
 	return rep, err
 }
 
-// CBroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
-func CBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, req Q) (int, error) {
+// ABroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
+func ABroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, req Q) (int, error) {
 	traceLogSend(a.traceSend, a.logger, "send broadcast", nil, reqTypeOf(req), req)
 	mgr := a.Manager()
 	return Broadcast(mgr, req)
 }
 
-// CMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func CMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
+// AMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func AMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
 	traceLogSend(a.traceSend, a.logger, "multicast", ids, reqTypeOf(req), req)
 	mgr := a.Manager()
 	return Multicast(mgr, ids, req)
 }
 
-// CMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func CMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) (int, error) {
+// AMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func AMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) (int, error) {
 	keys := make([]A, 0, len(ids))
 	for k := range ids {
 		keys = append(keys, k)
