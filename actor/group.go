@@ -136,11 +136,11 @@ func (g *group[A, S]) resolveActor(id A, allow_spawn bool) *actorRuntime[A, S] {
 	return actor
 }
 
-func (g *group[A, S]) holdActors(ids Seq[A]) []*actorRuntime[A, S] {
-	values := make([]*actorRuntime[A, S], 0)
+func (g *group[A, S]) holdActors(ids []A) []*actorRuntime[A, S] {
+	values := make([]*actorRuntime[A, S], 0, len(ids))
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	for id := range ids {
+	for _, id := range ids {
 		a := g.actors[id]
 		if a != nil && !a.closed.Load() {
 			a.hold()
@@ -184,7 +184,7 @@ func (g *group[A, S]) broadcast(m invokable[A, S]) (int, error) {
 	return count, nil
 }
 
-func (g *group[A, S]) multicast(ids Seq[A], m invokable[A, S]) (int, error) {
+func (g *group[A, S]) multicast(ids []A, m invokable[A, S]) (int, error) {
 	if g.stopping.Load() {
 		return 0, nil
 	}

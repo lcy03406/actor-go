@@ -3,9 +3,7 @@ package actor
 import (
 	"context"
 	"log/slog"
-	"maps"
 	"math"
-	"slices"
 	"time"
 )
 
@@ -186,21 +184,16 @@ func CBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 a
 func CMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
 	traceLogSend(a.traceSend, a.logger, "multicast", ids, reqTypeOf(req), req)
 	mgr := a.Manager()
-	return MulticastIter(mgr, Seq[A](slices.Values(ids)), req)
+	return Multicast(mgr, ids, req)
 }
 
 // CMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func CMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) (int, error) {
-	keys := Seq[A](maps.Keys(ids))
+	keys := make([]A, 0, len(ids))
+	for k := range ids {
+		keys = append(keys, k)
+	}
 	traceLogSend(a.traceSend, a.logger, "multicast", keys, reqTypeOf(req), req)
 	mgr := a.Manager()
-	return MulticastIter(mgr, keys, req)
-}
-
-// CMulticastValues 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func CMulticastValues[X comparable, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[X]A, req Q) (int, error) {
-	keys := Seq[A](maps.Values(ids))
-	traceLogSend(a.traceSend, a.logger, "multicast", keys, reqTypeOf(req), req)
-	mgr := a.Manager()
-	return MulticastIter(mgr, keys, req)
+	return Multicast(mgr, keys, req)
 }
