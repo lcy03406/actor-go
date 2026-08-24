@@ -51,6 +51,16 @@ func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorCon
 
 func (a *ActorContext[A, S]) clear() {
 	a.ctrl.clear()
+	if a.ctrl.OnQuit != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				a.ctrl.ilogger.Error("OnQuit panic", "error", r)
+			}
+			a.ctrl.invokeLogger("")
+		}()
+		a.ctrl.invokeLogger(actorNameOf(a.Id()) + ".OnQuit")
+		a.ctrl.OnQuit()
+	}
 }
 
 // Control 获取控制句柄，在Actor活跃期有效，应仅在本Actor内部使用，调用Quit后不应再使用。

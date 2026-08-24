@@ -31,7 +31,7 @@ func (i timerInvoke[A, S]) Invoke(actor *ActorContext[A, S], spawning bool) {
 		}
 		actor.ctrl.invokeLogger("")
 	}()
-	actor.ctrl.invokeLogger("timer." + i.id.String())
+	actor.ctrl.invokeLogger(actorNameOf(actor.Id()) + ".timer." + i.id.String())
 	i.fn()
 }
 

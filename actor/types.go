@@ -23,6 +23,10 @@ func actorTypeOf[A ActorId]() ActorType {
 	return id.ActorType()
 }
 
+func actorNameOf[A ActorId](id A) string {
+	return string(id.ActorType()) + "." + id.String()
+}
+
 type anyState interface{}
 
 // PtrReply 要求 reply 为指针类型 (~*R0)，handler 返回堆分配的指针。

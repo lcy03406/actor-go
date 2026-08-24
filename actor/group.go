@@ -2,7 +2,6 @@ package actor
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 )
@@ -28,7 +27,6 @@ type group[A ActorId, S anyState] struct {
 	options  Options
 	mu       sync.RWMutex
 	stopping atomic.Bool
-	logger   *slog.Logger
 	mgr      *Manager
 	registry map[string]handler[A]
 	onSpawn  OnSpawnFn[A, S]
@@ -38,13 +36,10 @@ type group[A ActorId, S anyState] struct {
 
 func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A], onSpawn OnSpawnFn[A, S], options Options) *group[A, S] {
 	ctx, cancel := context.WithCancel(m.ctx)
-	actorType := actorTypeOf[A]()
-	logger := m.rootLogger.With("actorType", actorType)
 	return &group[A, S]{
 		ctx:      ctx,
 		cancel:   cancel,
 		options:  options,
-		logger:   logger,
 		mgr:      m,
 		registry: registry,
 		onSpawn:  onSpawn,

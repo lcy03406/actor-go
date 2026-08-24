@@ -36,16 +36,6 @@ func (a *ActorControl) clear() {
 			a.cancel()
 		}
 	}()
-	if a.OnQuit != nil {
-		defer func() {
-			if r := recover(); r != nil {
-				a.ilogger.Error("OnQuit panic", "error", r)
-			}
-			a.invokeLogger("")
-		}()
-		a.invokeLogger("OnQuit")
-		a.OnQuit()
-	}
 }
 
 func (a *ActorControl) Context() context.Context {

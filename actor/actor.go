@@ -27,7 +27,7 @@ func newActor[A ActorId, S anyState](id A, g *group[A, S], options Options) *act
 		cancel:  cancel,
 		id:      id,
 		g:       g,
-		logger:  g.logger.With("actor", id.String()),
+		logger:  g.mgr.rootLogger.With("actor", actorNameOf(id)),
 		mailbox: make(chan invokable[A, S], options.BufMails),
 		doneCh:  make(chan struct{}),
 	}
@@ -195,7 +195,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 		if spawning {
 			onSpawn := a.g.onSpawn
 			if onSpawn != nil {
-				nctx.ctrl.invokeLogger("OnSpawn")
+				nctx.ctrl.invokeLogger(actorNameOf(a.id) + ".OnSpawn")
 				err := onSpawn(nctx)
 				if err != nil {
 					// OnSpawn 初始化失败：丢弃本次创建，Actor 不进入 idle 池也不注册，
