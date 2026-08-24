@@ -1,5 +1,7 @@
 package actor
 
+import "strconv"
+
 // ActorType 是 Actor 的类型标识（等同于 Group 名），用于路由与注册查找。
 type ActorType string
 
@@ -124,3 +126,7 @@ type OnSpawnFn[A ActorId, S anyState] = func(actor *ActorContext[A, S]) error
 
 // TimerId 代表一个定时器。在Actor实例内部唯一。
 type TimerId int
+
+func (t TimerId) String() string {
+	return strconv.Itoa(int(t))
+}

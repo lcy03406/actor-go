@@ -31,12 +31,12 @@ type group[A ActorId, S anyState] struct {
 	logger   *slog.Logger
 	mgr      *Manager
 	registry map[string]handler[A]
-	on_spawn OnSpawnFn[A, S]
+	onSpawn  OnSpawnFn[A, S]
 	actors   map[A]*actorRuntime[A, S]
 	idle     atomic.Int32
 }
 
-func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A], on_spawn OnSpawnFn[A, S], options Options) *group[A, S] {
+func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A], onSpawn OnSpawnFn[A, S], options Options) *group[A, S] {
 	ctx, cancel := context.WithCancel(m.ctx)
 	actorType := actorTypeOf[A]()
 	logger := m.rootLogger.With("actorType", actorType)
@@ -47,7 +47,7 @@ func newGroup[A ActorId, S anyState](m *Manager, registry map[string]handler[A],
 		logger:   logger,
 		mgr:      m,
 		registry: registry,
-		on_spawn: on_spawn,
+		onSpawn:  onSpawn,
 		actors:   make(map[A]*actorRuntime[A, S]),
 	}
 }

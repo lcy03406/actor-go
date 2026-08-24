@@ -63,14 +63,14 @@ func (h *TracingHandler) Handle(_ context.Context, r slog.Record) error {
 // WithAttrs 实现 With 添加属性（标签）
 func (h *TracingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	parts := make([]string, 0, 1+len(attrs))
-	if len(h.tag) > 0 {
-		parts = append(parts, h.tag)
-	}
 	// 返回新 Handler，合并原有标签与新传入的属性
 	for _, attr := range attrs {
 		parts = append(parts, attr.Value.String())
 	}
 	tag := strings.Join(parts, ".")
+	if len(h.tag) > 0 {
+		tag = h.tag + "/" + tag
+	}
 	return &TracingHandler{
 		tag: tag,
 		lvl: h.lvl,

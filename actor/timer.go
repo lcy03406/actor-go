@@ -1,6 +1,8 @@
 package actor
 
-import "time"
+import (
+	"time"
+)
 
 type timerStub struct {
 	fn func()
@@ -27,7 +29,9 @@ func (i timerInvoke[A, S]) Invoke(actor *ActorContext[A, S], spawning bool) {
 			id := actor.Id()
 			actor.Logger().Warn("timer invoke panic", "id", id, "panic", r)
 		}
+		actor.ctrl.invokeLogger("")
 	}()
+	actor.ctrl.invokeLogger("timer." + i.id.String())
 	i.fn()
 }
 

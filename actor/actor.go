@@ -193,9 +193,10 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 		// 以便 OnSpawn 内的 Open/Quit 能让 prevActive 与最终 active 的跳变被正确结算）。
 		prevActive = nctx.ctrl.active
 		if spawning {
-			on_spawn := a.g.on_spawn
-			if on_spawn != nil {
-				err := on_spawn(nctx)
+			onSpawn := a.g.onSpawn
+			if onSpawn != nil {
+				nctx.ctrl.invokeLogger("OnSpawn")
+				err := onSpawn(nctx)
 				if err != nil {
 					// OnSpawn 初始化失败：丢弃本次创建，Actor 不进入 idle 池也不注册，
 					// ctx 直接 clear。随后 nctx==nil，本轮不会再调用 spawn handler，
@@ -207,6 +208,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 					m.Fail(err)
 					continue
 				}
+				nctx.ctrl.invokeLogger("")
 			}
 		}
 		m.Invoke(nctx, spawning) // 若 panic，被上面 defer 捕获：原地替换 buf[nx] 并保留 nctx
