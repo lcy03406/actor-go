@@ -9,7 +9,9 @@ import (
 
 type ActorControl struct {
 	ctx       context.Context
-	logger    *slog.Logger
+	alogger   *slog.Logger
+	ilogger   *slog.Logger
+	from      string
 	traceSend TraceOption
 	mgr       *Manager
 	cancel    func()
@@ -37,7 +39,7 @@ func (a *ActorControl) clear() {
 	if a.OnQuit != nil {
 		defer func() {
 			if r := recover(); r != nil {
-				a.logger.Error("OnQuit panic", "error", r)
+				a.alogger.Error("OnQuit panic", "error", r)
 			}
 		}()
 		a.OnQuit()
@@ -50,7 +52,17 @@ func (a *ActorControl) Context() context.Context {
 
 // Logger 返回 Actor 的日志记录器。
 func (a *ActorControl) Logger() *slog.Logger {
-	return a.logger
+	return a.ilogger
+}
+
+// InvokeLogger 设置一次调用的日志记录器。
+func (a *ActorControl) invokeLogger(from string) {
+	a.from = from
+	if len(from) == 0 {
+		a.ilogger = a.alogger
+	} else {
+		a.ilogger = a.alogger.With("from", from)
+	}
 }
 
 // Manager 返回 Actor 系统顶层 Manager，用于跨 Group 的 Actor 通信。
@@ -159,32 +171,32 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 
 // APost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
 func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
-	traceLogSend(a.traceSend, a.logger, "send post", id, reqTypeOf(req), req)
-	return Post(a.Manager(), id, req)
+	traceLogSend(a.traceSend, a.ilogger, "send post", id, reqTypeOf(req), req)
+	return FPost(a.Manager(), a.from, id, req)
 }
 
 // ACall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
 func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (R, error) {
-	traceLogSend(a.traceSend, a.logger, "send call", id, reqTypeOf(req), req)
+	traceLogSend(a.traceSend, a.ilogger, "send call", id, reqTypeOf(req), req)
 	ctx := a.Context()
 	mgr := a.Manager()
-	rep, err := Call(ctx, mgr, id, req)
-	traceLogRecv(a.traceSend, a.logger, "recv reply", id, reqTypeOf(req), rep)
+	rep, err := FCall(ctx, mgr, a.from, id, req)
+	traceLogSend(a.traceSend, a.ilogger, "recv reply", id, reqTypeOf(req), rep)
 	return rep, err
 }
 
 // ABroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
 func ABroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, req Q) (int, error) {
-	traceLogSend(a.traceSend, a.logger, "send broadcast", nil, reqTypeOf(req), req)
+	traceLogSend(a.traceSend, a.ilogger, "send broadcast", nil, reqTypeOf(req), req)
 	mgr := a.Manager()
-	return Broadcast(mgr, req)
+	return FBroadcast(mgr, a.from, req)
 }
 
 // AMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func AMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
-	traceLogSend(a.traceSend, a.logger, "multicast", ids, reqTypeOf(req), req)
+	traceLogSend(a.traceSend, a.ilogger, "multicast", ids, reqTypeOf(req), req)
 	mgr := a.Manager()
-	return Multicast(mgr, ids, req)
+	return FMulticast(mgr, a.from, ids, req)
 }
 
 // AMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
@@ -193,7 +205,5 @@ func AMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q
 	for k := range ids {
 		keys = append(keys, k)
 	}
-	traceLogSend(a.traceSend, a.logger, "multicast", keys, reqTypeOf(req), req)
-	mgr := a.Manager()
-	return Multicast(mgr, keys, req)
+	return AMulticast(a, keys, req)
 }

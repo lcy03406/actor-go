@@ -26,15 +26,15 @@ func traceLogSend(option TraceOption, logger *slog.Logger, title string, to any,
 	}
 }
 
-func traceLogRecv(option TraceOption, logger *slog.Logger, title string, from any, reqType string, req any) {
+func traceLogRecv(option TraceOption, logger *slog.Logger, title string, reqType string, req any) {
 	switch option {
 	case TraceNone:
 		return
 	case TraceHead:
-		logger.Info(title, "from", brief.Sprint(from), "req", reqType)
+		logger.Info(title, "req", reqType)
 	case TraceBrief:
-		logger.Info(title, "from", brief.Sprint(from), "req", reqType, "msg", brief.Sprint(req))
+		logger.Info(title, "req", reqType, "msg", brief.Sprint(req))
 	case TraceVerbose:
-		logger.Info(title, "from", verbose.Sprint(from), "req", reqType, "msg", verbose.Sprint(req))
+		logger.Info(title, "req", reqType, "msg", verbose.Sprint(req))
 	}
 }

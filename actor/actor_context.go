@@ -22,7 +22,8 @@ func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorCon
 	return &ActorContext[A, S]{
 		ctrl: ActorControl{
 			ctx:       ctx,
-			logger:    actor.logger,
+			alogger:   actor.logger,
+			ilogger:   actor.logger,
 			traceSend: actor.g.options.TraceSend,
 			mgr:       actor.g.mgr,
 			cancel:    cancel,
@@ -80,7 +81,7 @@ func (a *ActorContext[A, S]) SetState(s S) {
 
 // Logger 返回 Actor 的日志记录器。
 func (a *ActorContext[A, S]) Logger() *slog.Logger {
-	return a.ctrl.logger
+	return a.ctrl.Logger()
 }
 
 // Manager 返回 Actor 系统顶层 Manager，用于跨 Group 的 Actor 通信。
@@ -167,7 +168,7 @@ func (a *ActorContext[A, S]) StopTimer(timerId TimerId) bool {
 	return a.ctrl.StopTimer(timerId)
 }
 
-//ControlState 获取Control和State的便捷函数
+// ControlState 获取Control和State的便捷函数
 func (a *ActorContext[A, S]) ControlState() (*ActorControl, A, *S) {
 	return a.Control(), a.Id(), a.State()
 }

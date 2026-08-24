@@ -2,6 +2,7 @@ package actor
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 )
@@ -16,17 +17,21 @@ type Manager struct {
 	groups     map[ActorType]groupErased
 	rootLogger *slog.Logger
 	logger     *slog.Logger
+	name       string
+	seq        atomic.Int32
 }
 
 // NewManager 创建一个新的 Manager。
 func NewManager(logger *slog.Logger) *Manager {
+	name := "mgr"
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		ctx:        ctx,
 		cancel:     cancel,
 		groups:     make(map[ActorType]groupErased),
 		rootLogger: logger,
-		logger:     logger.With("component", "ActorManager"),
+		logger:     logger.With("component", name),
+		name:       name,
 	}
 }
 
@@ -42,6 +47,11 @@ func (m *Manager) RootLogger() *slog.Logger {
 // Logger 返回 Manager 的日志记录器。
 func (m *Manager) Logger() *slog.Logger {
 	return m.logger
+}
+
+// newSeq 返回一个新序号。
+func (m *Manager) newSeq() string {
+	return fmt.Sprintf("%s.%d", m.name, m.seq.Add(1))
 }
 
 type TraceOption int
@@ -118,11 +128,16 @@ func findHandler[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 
 
 // Post 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
 func Post[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, id A, req Q) error {
+	return FPost(mgr, mgr.newSeq(), id, req)
+}
+
+// FPost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
+func FPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from string, id A, req Q) error {
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {
 		return &GroupNotFoundError{id}
 	}
-	return gh.h.handlerPost(gh.g, id, req)
+	return gh.h.handlerPost(from, gh.g, id, req)
 }
 
 // Call 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
@@ -132,11 +147,15 @@ func Post[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mg
 //	reply, err := actor.Call[TestActorId](ctx, mgr, id, &TestAdd{Add: 10})
 //	if err != nil { ... }
 func Call[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, id A, req Q) (R, error) {
+	return FCall(ctx, mgr, mgr.newSeq(), id, req)
+}
+
+func FCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, from string, id A, req Q) (R, error) {
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {
 		return nil, &GroupNotFoundError{id}
 	}
-	ch, err := gh.h.handlerCall(gh.g, id, req, nil)
+	ch, err := gh.h.handlerCall(from, gh.g, id, req, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -159,11 +178,15 @@ func waitResult[R PtrReply[R0], R0 any](ctx context.Context, ch <-chan result[R,
 // 在返回错误前自行释放。其类型推导与错误处理语义与 Call 一致，差别仅在于回复需支持可释放。
 // 详见 SafeReply 的注释。
 func SafeCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, id A, req Q) (R, error) {
+	return SafeFCall(ctx, mgr, mgr.newSeq(), id, req)
+}
+
+func SafeFCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, from string, id A, req Q) (R, error) {
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {
 		return nil, &GroupNotFoundError{id}
 	}
-	ch, err := gh.h.handlerCall(gh.g, id, req, R.Close)
+	ch, err := gh.h.handlerCall(from, gh.g, id, req, R.Close)
 	if err != nil {
 		return nil, err
 	}
@@ -187,22 +210,32 @@ func safeResult[R SafeReply[R0], R0 any](ctx context.Context, ch chan result[R, 
 
 // Broadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
 func Broadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, req Q) (int, error) {
+	return FBroadcast(mgr, mgr.newSeq(), req)
+}
+
+// Broadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
+func FBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from string, req Q) (int, error) {
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {
 		return 0, &GroupNotFoundError{id0}
 	}
-	return gh.h.handlerBroadcast(gh.g, req)
+	return gh.h.handlerBroadcast(from, gh.g, req)
 }
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) (int, error) {
+	return FMulticast(mgr, mgr.newSeq(), ids, req)
+}
+
+// Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func FMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from string, ids []A, req Q) (int, error) {
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {
 		return 0, &GroupNotFoundError{id0}
 	}
-	return gh.h.handlerMulticast(gh.g, ids, req)
+	return gh.h.handlerMulticast(from, gh.g, ids, req)
 }
 
 // Count 返回指定 Group 当前活跃的 Actor 数量（不含 idle 退出的 Actor）。
@@ -224,7 +257,7 @@ func Finalize[A ActorId, Q Request[A, OkReply, Q0, Ok], Q0 any](mgr *Manager, re
 	if err != nil {
 		return
 	}
-	if _, err := gh.h.handlerBroadcast(gh.g, req); err != nil {
+	if _, err := gh.h.handlerBroadcast(mgr.newSeq(), gh.g, req); err != nil {
 		mgr.logger.Error("finalize broadcast failed", "error", err)
 	}
 	gh.g.joinGroup()
