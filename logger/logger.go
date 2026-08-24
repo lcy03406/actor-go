@@ -13,20 +13,22 @@ const TagAttr = "logtag"
 // TracingHandler 实现 slog.Handler 接口
 type TracingHandler struct {
 	tag string
+	lvl slog.Leveler
 	out io.Writer // 输出目标
 }
 
 // NewTracingHandler 创建新的 Handler
-func NewTracingHandler(out io.Writer) *TracingHandler {
+func NewTracingHandler(out io.Writer, leveler slog.Leveler) *TracingHandler {
 	return &TracingHandler{
 		tag: "",
+		lvl: leveler,
 		out: out,
 	}
 }
 
-// Enabled 控制日志级别（这里简单全部启用）
-func (h *TracingHandler) Enabled(_ context.Context, _ slog.Level) bool {
-	return true
+// Enabled 控制日志级别
+func (h *TracingHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return h.lvl.Level() <= level
 }
 
 // Handle 处理单条日志记录
@@ -71,6 +73,7 @@ func (h *TracingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	tag := strings.Join(parts, ".")
 	return &TracingHandler{
 		tag: tag,
+		lvl: h.lvl,
 		out: h.out,
 	}
 }
