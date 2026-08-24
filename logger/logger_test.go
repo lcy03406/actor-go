@@ -10,7 +10,7 @@ import (
 
 // 使用示例
 func TestLogger(t *testing.T) {
-	handler := logger.NewTracingHandler(os.Stdout)
+	handler := logger.NewTracingHandler(os.Stdout, slog.LevelInfo)
 	logger := slog.New(handler)
 
 	// 设置标签（通过 With）

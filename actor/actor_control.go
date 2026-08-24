@@ -144,6 +144,7 @@ func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
 	timer := time.AfterFunc(d, a.timerFn(i))
 	i.t = timer
 	a.timers[id] = timer
+	a.ilogger.Debug("timer start", "timer", id)
 	return id
 }
 
@@ -158,6 +159,7 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 	}
 	timer.Stop()              //不用管Stop结果，即使取消失败也没事
 	delete(a.timers, timerId) //只要从map里拿掉，就不会执行回调函数
+	a.ilogger.Debug("timer stop", "timer", timerId)
 	return true
 }
 
