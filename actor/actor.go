@@ -43,15 +43,13 @@ func (a *actorRuntime[A, S]) unhold() {
 }
 
 func (a *actorRuntime[A, S]) send(m invokable[A, S]) error {
-	a.mailbox <- m
-	return nil
-	// select {
-	// case a.mailbox <- m:
-	// 	return nil
-	// default:
-	// 	a.logger.Warn("mailbox full, dropping message")
-	// 	return &ActorBusyError{a.id}
-	// }
+	select {
+	case a.mailbox <- m:
+		return nil
+	default:
+		a.logger.Warn("mailbox full, dropping message")
+		return &ActorBusyError{a.id}
+	}
 }
 
 // requestClose 请求 actor 退出：标记 closed 拒绝新消息，发送 closeMsg 通知 run 退出。

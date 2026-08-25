@@ -230,6 +230,9 @@ func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 an
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func FMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from string, ids []A, req Q) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {
