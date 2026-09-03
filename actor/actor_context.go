@@ -3,6 +3,7 @@ package actor
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -19,11 +20,22 @@ func newActorContext[A ActorId, S anyState](actor *actorRuntime[A, S]) *ActorCon
 	ctx, cancel := context.WithCancel(actor.ctx)
 	g := actor.g
 	id := actor.id
+	seqCounter := new(int)
 	return &ActorContext[A, S]{
 		ctrl: ActorControl{
-			ctx:       ctx,
-			alogger:   actor.logger,
-			ilogger:   actor.logger,
+			ctx:     ctx,
+			alogger: actor.logger,
+			ilogger: actor.logger,
+			fromSeq: func(f From) From {
+				*seqCounter++
+				seq := *seqCounter
+				origin := f.Origin
+				reqSeq := actorNameOf(id) + "." + strconv.Itoa(seq)
+				if len(origin) == 0 {
+					origin = reqSeq
+				}
+				return From{Origin: origin, ReqSeq: reqSeq}
+			},
 			traceSend: actor.g.options.TraceSend,
 			mgr:       actor.g.mgr,
 			cancel:    cancel,
@@ -56,9 +68,9 @@ func (a *ActorContext[A, S]) clear() {
 			if r := recover(); r != nil {
 				a.ctrl.ilogger.Error("OnQuit panic", "error", r)
 			}
-			a.ctrl.invokeLogger("")
+			a.ctrl.resetLogger()
 		}()
-		a.ctrl.invokeLogger(actorNameOf(a.Id()) + ".OnQuit")
+		a.ctrl.invokeLogger(MakeFrom(a.Id(), "OnQuit"))
 		a.ctrl.OnQuit()
 	}
 }

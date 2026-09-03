@@ -9,10 +9,10 @@ type handler[A ActorId] interface {
 }
 
 type handlerBase[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] interface {
-	handlerCall(from string, gb groupBase[A], id A, req Q, recoverFn func(R)) (chan result[R, R0], error)
-	handlerPost(from string, gb groupBase[A], id A, req Q) error
-	handlerBroadcast(from string, gb groupBase[A], req Q) (int, error)
-	handlerMulticast(from string, gb groupBase[A], ids []A, req Q) (int, error)
+	handlerCall(from From, gb groupBase[A], id A, req Q, recoverFn func(R)) (chan result[R, R0], error)
+	handlerPost(from From, gb groupBase[A], id A, req Q) error
+	handlerBroadcast(from From, gb groupBase[A], req Q) (int, error)
+	handlerMulticast(from From, gb groupBase[A], ids []A, req Q) (int, error)
 }
 
 type handlerEntry[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
@@ -25,7 +25,7 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) ReqType() string {
 	return h.reqType
 }
 
-func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(from string, gb groupBase[A], id A, req Q, clean func(R)) (chan result[R, R0], error) {
+func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(from From, gb groupBase[A], id A, req Q, clean func(R)) (chan result[R, R0], error) {
 	g := gb.(*group[A, S])
 	a := g.resolveActor(id, h.allow_spawn)
 	if a == nil {
@@ -46,7 +46,7 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerCall(from string, gb groupBase
 	return ch, nil
 }
 
-func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerPost(from string, gb groupBase[A], id A, req Q) error {
+func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerPost(from From, gb groupBase[A], id A, req Q) error {
 	g := gb.(*group[A, S])
 	a := g.resolveActor(id, h.allow_spawn)
 	if a == nil {
@@ -75,7 +75,7 @@ func resolveError[A ActorId, S anyState](g *group[A, S], id A, allowSpawn bool) 
 	return &SpawnRefusedError{Id: id, Reason: "spawn failed"}
 }
 
-func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerBroadcast(from string, gb groupBase[A], req Q) (int, error) {
+func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerBroadcast(from From, gb groupBase[A], req Q) (int, error) {
 	g := gb.(*group[A, S])
 	i := &invoke[A, S, Q, R, Q0, R0]{
 		from: from,
@@ -85,7 +85,7 @@ func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerBroadcast(from string, gb grou
 	return g.broadcast(i)
 }
 
-func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerMulticast(from string, gb groupBase[A], ids []A, req Q) (int, error) {
+func (h *handlerEntry[A, S, Q, R, Q0, R0]) handlerMulticast(from From, gb groupBase[A], ids []A, req Q) (int, error) {
 	g := gb.(*group[A, S])
 	i := &invoke[A, S, Q, R, Q0, R0]{
 		from: from,

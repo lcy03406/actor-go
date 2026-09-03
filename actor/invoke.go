@@ -12,7 +12,7 @@ type result[R PtrReply[R0], R0 any] struct {
 }
 
 type invoke[A ActorId, S anyState, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any] struct {
-	from  string
+	from  From
 	h     *handlerEntry[A, S, Q, R, Q0, R0]
 	req   Q
 	ch    chan result[R, R0]
@@ -34,10 +34,9 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Allow(id A, spawning bool) bool {
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning bool) {
-	traceRecv := actor.actor.g.options.TraceRecv
 	actor.ctrl.invokeLogger(i.from)
-	defer actor.ctrl.invokeLogger("")
-	traceLogRecv(traceRecv, actor.Logger(), "recv invoke", reqTypeOf(i.req), i.req)
+	defer actor.ctrl.resetLogger()
+	actor.Logger().Info("recv invoke", "req", reqTypeOf(i.req))
 	rep, err := i.h.fn(actor, i.req, spawning)
 	if i.ch != nil {
 		if rep != nil && i.clean != nil {
@@ -47,10 +46,10 @@ func (i *invoke[A, S, Q, R, Q0, R0]) Invoke(actor *ActorContext[A, S], spawning 
 				}
 			}()
 		}
-		traceLogRecv(traceRecv, actor.Logger(), "send reply", reqTypeOf(i.req), rep)
+		actor.Logger().Info("send reply", "rep", rep)
 		i.ch <- result[R, R0]{rep, err}
 	}
-	traceLogRecv(traceRecv, actor.Logger(), "recv return", reqTypeOf(i.req), nil)
+	actor.Logger().Info("return")
 }
 
 func (i *invoke[A, S, Q, R, Q0, R0]) Fail(err error) {

@@ -193,7 +193,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 		if spawning {
 			onSpawn := a.g.onSpawn
 			if onSpawn != nil {
-				nctx.ctrl.invokeLogger(actorNameOf(a.id) + ".OnSpawn")
+				nctx.ctrl.invokeLogger(MakeFrom(a.id, "OnSpawn"))
 				err := onSpawn(nctx)
 				if err != nil {
 					// OnSpawn 初始化失败：丢弃本次创建，Actor 不进入 idle 池也不注册，
@@ -206,7 +206,7 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 					m.Fail(err)
 					continue
 				}
-				nctx.ctrl.invokeLogger("")
+				nctx.ctrl.resetLogger()
 			}
 		}
 		m.Invoke(nctx, spawning) // 若 panic，被上面 defer 捕获：原地替换 buf[nx] 并保留 nctx

@@ -29,9 +29,9 @@ func (i timerInvoke[A, S]) Invoke(actor *ActorContext[A, S], spawning bool) {
 			id := actor.Id()
 			actor.Logger().Warn("timer invoke panic", "id", id, "panic", r)
 		}
-		actor.ctrl.invokeLogger("")
+		actor.ctrl.resetLogger()
 	}()
-	actor.ctrl.invokeLogger(actorNameOf(actor.Id()) + ".timer." + i.id.String())
+	actor.ctrl.invokeLogger(MakeFrom(actor.Id(), "timer."+i.id.String()))
 	i.fn()
 }
 
