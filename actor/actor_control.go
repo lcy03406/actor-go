@@ -166,27 +166,49 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 }
 
 // APost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
-func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
+func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (err error) {
 	traceLogSend(a.traceSend, a.ilogger, "send post", id, reqTypeOf(req), req)
-	err := FPost(a.Manager(), a.fromSeq(a.from), id, req)
-	if err != nil {
-		a.ilogger.Warn("post fail", "err", err)
+	for i := range 3 {
+		if i > 0 {
+			t := time.Duration(i*i*20) * time.Millisecond
+			time.Sleep(t)
+		}
+		err = FPost(a.Manager(), a.fromSeq(a.from), id, req)
+		if err == nil {
+			return
+		} else {
+			a.ilogger.Warn("post fail", "retry", i, "err", err)
+			if _, ok := err.(*ActorBusyError); !ok {
+				return
+			}
+		}
 	}
-	return err
+	return
 }
 
 // ACall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
-func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (R, error) {
+func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (rep R, err error) {
 	traceLogSend(a.traceSend, a.ilogger, "send call", id, reqTypeOf(req), req)
 	ctx := a.Context()
 	mgr := a.Manager()
-	rep, err := FCall(ctx, mgr, a.fromSeq(a.from), id, req)
-	if err == nil {
-		a.ilogger.Info("recv reply", "rep", rep)
-	} else {
-		a.ilogger.Warn("call fail", "err", err)
+	for i := range 3 {
+		if i > 0 {
+			t := time.Duration(i*i*20) * time.Millisecond
+			time.Sleep(t)
+		}
+
+		rep, err = FCall(ctx, mgr, a.fromSeq(a.from), id, req)
+		if err == nil {
+			a.ilogger.Info("recv reply", "rep", rep)
+			return
+		} else {
+			a.ilogger.Warn("call fail", "retry", i, "err", err)
+			if _, ok := err.(*ActorBusyError); !ok {
+				return
+			}
+		}
 	}
-	return rep, err
+	return
 }
 
 // ABroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
