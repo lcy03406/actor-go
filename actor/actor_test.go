@@ -254,7 +254,8 @@ func TestActorMulticast(t *testing.T) {
 	}
 
 	// Multicast close 到指定 Actor
-	hit, _ := actor.Multicast(mgr, ids[:2], &TestClose{})
+	list, _ := actor.Multicast(mgr, ids[:2], &TestClose{})
+	hit := actor.CountNoErr(list)
 	if hit != 2 {
 		t.Errorf("expected multicast to hit 2 actors, got %d", hit)
 	}
@@ -510,7 +511,8 @@ func TestActorGroupNotFound(t *testing.T) {
 	}
 
 	// Multicast 应返回 0
-	n, _ = actor.Multicast(mgr, []TestActorId{testId}, &TestClose{})
+	list, _ := actor.Multicast(mgr, []TestActorId{testId}, &TestClose{})
+	n = actor.CountNoErr(list)
 	if n != 0 {
 		t.Errorf("expected 0 multicast hits for unregistered group, got %d", n)
 	}
@@ -521,10 +523,11 @@ func TestActorEmptyMulticast(t *testing.T) {
 	mgr := actor.NewManager(slog.Default())
 	setupManager(mgr)
 
-	hit, err := actor.Multicast(mgr, []TestActorId{}, &TestClose{})
+	list, err := actor.Multicast(mgr, []TestActorId{}, &TestClose{})
 	if err != nil {
 		t.Errorf("expected no error for empty multicast, got: %v", err)
 	}
+	hit := actor.CountNoErr(list)
 	if hit != 0 {
 		t.Errorf("expected 0 hits for empty multicast, got %d", hit)
 	}

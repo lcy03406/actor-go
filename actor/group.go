@@ -88,7 +88,7 @@ func (g *group[A, S]) spawnActor(id A) (*actorRuntime[A, S], bool) {
 	actor.holder.Store(2)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.stopping.Load() {
+	if g.isStopping() {
 		return nil, false
 	}
 	old := g.actors[id]
@@ -113,36 +113,40 @@ func (g *group[A, S]) spawnActor(id A) (*actorRuntime[A, S], bool) {
 // resolveActor 唤醒已有 actor 或创建新 actor。
 // 找到已关闭（正在退出）的 actor 时返回 nil——不覆盖创建新 actor，
 // 需等旧 actor 完全退出（从 map 删除）后才能 spawn。
-func (g *group[A, S]) resolveActor(id A, allow_spawn bool) *actorRuntime[A, S] {
-	if g.stopping.Load() {
-		return nil
+func (g *group[A, S]) resolveActor(id A, allow_spawn bool) (*actorRuntime[A, S], error) {
+	if g.isStopping() {
+		return nil, &GroupClosedError{Id: id}
 	}
 	actor := g.holdActor(id)
 	if actor != nil {
-		return actor
+		return actor, nil
 	}
 	if !allow_spawn {
-		return nil
+		return nil, &ActorNotFoundError{Id: id}
 	}
 	actor, spawn := g.spawnActor(id)
 	if spawn {
 		go actor.run()
 	}
-	return actor
+	return actor, nil
 }
 
-func (g *group[A, S]) holdActors(ids []A) []*actorRuntime[A, S] {
+func (g *group[A, S]) holdActors(ids []A) ([]*actorRuntime[A, S], []A) {
 	values := make([]*actorRuntime[A, S], 0, len(ids))
+	notfound := make([]A, 0)
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	for _, id := range ids {
 		a := g.actors[id]
 		if a != nil && !a.closed.Load() {
+			//FIXME 这里有一处语义没对齐，如果多播请求是allow_spawn的，当前实现能否spawn成功取决于是否还在idle缓存中，应实现可spawn或明确多播不spawn
 			a.hold()
 			values = append(values, a)
+		} else {
+			notfound = append(notfound, id)
 		}
 	}
-	return values
+	return values, notfound
 }
 
 func (g *group[A, S]) holdAllActors() []*actorRuntime[A, S] {
@@ -165,8 +169,8 @@ func unhold[A ActorId, S anyState](actors []*actorRuntime[A, S]) {
 }
 
 func (g *group[A, S]) broadcast(m invokable[A, S]) (int, error) {
-	if g.stopping.Load() {
-		return 0, nil
+	if g.isStopping() {
+		return 0, &GroupClosedError{}
 	}
 	count := 0
 	actors := g.holdAllActors()
@@ -179,19 +183,23 @@ func (g *group[A, S]) broadcast(m invokable[A, S]) (int, error) {
 	return count, nil
 }
 
-func (g *group[A, S]) multicast(ids []A, m invokable[A, S]) (int, error) {
-	if g.stopping.Load() {
-		return 0, nil
+func (g *group[A, S]) multicast(ids []A, m invokable[A, S]) ([]IdErr[A], error) {
+	if g.isStopping() {
+		return nil, &GroupClosedError{}
 	}
-	count := 0
-	actors := g.holdActors(ids)
+	list := make([]IdErr[A], 0, len(ids))
+	actors, notfound := g.holdActors(ids)
 	defer unhold(actors)
+
 	for _, a := range actors {
-		if a.send(m) == nil {
-			count++
-		}
+		err := a.send(m)
+		list = append(list, IdErr[A]{Id: a.id, Err: err})
 	}
-	return count, nil
+	for _, id := range notfound {
+		err := &ActorNotFoundError{Id: id}
+		list = append(list, IdErr[A]{Id: id, Err: err})
+	}
+	return list, nil
 }
 
 func (g *group[A, S]) count() int {

@@ -227,7 +227,7 @@ func Multicast[M rpc.Message, C rpc.Codec[M], T rpc.Transport[M], A actor.ActorI
 		if err != nil {
 			return total, err
 		}
-		total += n
+		total += actor.CountNoErr(n)
 	}
 
 	for _, g := range nodeGroups {

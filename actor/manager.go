@@ -224,19 +224,19 @@ func FBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 a
 }
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) (int, error) {
+func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) ([]IdErr[A], error) {
 	return FMulticast(mgr, mgr.newFrom(), ids, req)
 }
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func FMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from From, ids []A, req Q) (int, error) {
+func FMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from From, ids []A, req Q) ([]IdErr[A], error) {
 	if len(ids) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {
-		return 0, &GroupNotFoundError{id0}
+		return nil, &GroupNotFoundError{id0}
 	}
 	return gh.h.handlerMulticast(from, gh.g, ids, req)
 }

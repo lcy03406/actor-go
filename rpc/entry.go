@@ -75,5 +75,7 @@ func (e reqEntry[M, C, A, Q, R, Q0, R0]) multicast(mgr *actor.Manager, idsM []M,
 	if err != nil {
 		return
 	}
-	return actor.Multicast(mgr, ids, req)
+	var list []actor.IdErr[A]
+	list, err = actor.Multicast(mgr, ids, req)
+	return actor.CountNoErr(list), err
 }

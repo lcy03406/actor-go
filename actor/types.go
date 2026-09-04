@@ -1,6 +1,8 @@
 package actor
 
-import "strconv"
+import (
+	"strconv"
+)
 
 // ActorType 是 Actor 的类型标识（等同于 Group 名），用于路由与注册查找。
 type ActorType string
@@ -133,4 +135,19 @@ type TimerId int
 
 func (t TimerId) String() string {
 	return strconv.Itoa(int(t))
+}
+
+type IdErr[A ActorId] struct {
+	Id  A
+	Err error
+}
+
+func CountNoErr[A ActorId](list []IdErr[A]) int {
+	count := 0
+	for _, iderr := range list {
+		if iderr.Err == nil {
+			count++
+		}
+	}
+	return count
 }

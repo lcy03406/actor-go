@@ -397,10 +397,11 @@ func TestRequestHandlerMulticast(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 只关闭前 2 个
-	hit, err := actor.Multicast(mgr, ids[:2], &HandlerClose{})
+	list, err := actor.Multicast(mgr, ids[:2], &HandlerClose{})
 	if err != nil {
 		t.Fatalf("Multicast failed: %v", err)
 	}
+	hit := actor.CountNoErr(list)
 	if hit != 2 {
 		t.Errorf("expected 2 hits, got %d", hit)
 	}

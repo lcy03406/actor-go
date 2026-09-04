@@ -8,19 +8,26 @@ import (
 )
 
 type ActorControl struct {
-	ctx       context.Context
-	alogger   *slog.Logger
-	ilogger   *slog.Logger
-	from      From
-	fromSeq   func(From) From //生成一个新的唯一请求ID
-	traceSend TraceOption
-	mgr       *Manager
-	cancel    func()
-	timerFn   func(i *timerStub) func()
-	active    bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
-	OnQuit    func() //用户注册，退出时框架调用
-	timers    map[TimerId]*time.Timer
-	timerId   TimerId
+	ctx         context.Context
+	alogger     *slog.Logger
+	ilogger     *slog.Logger
+	from        From
+	fromSeq     func(From) From //生成一个新的唯一请求ID
+	traceSend   TraceOption
+	mgr         *Manager
+	cancel      func()
+	timerFn     func(i *timerStub) func()
+	active      bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
+	OnQuit      func() //用户注册，退出时框架调用
+	timers      map[TimerId]*time.Timer
+	timerId     TimerId
+	postpone    []postponeItem
+	postponeSet map[any]struct{}
+}
+
+type postponeItem struct {
+	id any // 目标 Actor ID（必须可比较，如 string, int, uint64）
+	fn func() error
 }
 
 func (a *ActorControl) clear() {
@@ -165,30 +172,106 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 	return true
 }
 
-// APost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
-func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (err error) {
-	traceLogSend(a.traceSend, a.ilogger, "send post", id, reqTypeOf(req), req)
-	for i := range 3 {
-		if i > 0 {
-			t := time.Duration(i*i*20) * time.Millisecond
-			time.Sleep(t)
+func (a *ActorControl) poseponePost() {
+	if len(a.postpone) == 0 {
+		return
+	}
+
+	// 1. 取出所有待处理项，并清空队列（切断底层数组共享，防止嵌套 append 覆盖）
+	list := a.postpone
+	a.postpone = nil
+
+	// 2. 遍历执行，并收集仍需重试的项
+	newPostpone := make([]postponeItem, 0, len(list))
+	newSet := make(map[any]struct{})
+
+	for _, item := range list {
+		err := item.fn()
+		if _, ok := err.(*ActorBusyError); ok {
+			// 仍繁忙：保留
+			newPostpone = append(newPostpone, item)
+			newSet[item.id] = struct{}{}
 		}
+		// 成功或其他不可恢复错误：不保留，即从集合中移除该 ID
+	}
+
+	// 3. 原子替换
+	a.postpone = newPostpone
+	a.postponeSet = newSet
+}
+
+func appendPostpone[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) {
+	fn := func() error {
+		traceLogSend(a.traceSend, a.ilogger, "postpone post", id, reqTypeOf(req), req)
+		err := FPost(a.Manager(), a.fromSeq(a.from), id, req)
+		if err != nil {
+			a.ilogger.Warn("postpone fail", "err", err)
+		}
+		return err
+	}
+	a.postpone = append(a.postpone, postponeItem{id: id, fn: fn})
+	if a.postponeSet == nil {
+		a.postponeSet = make(map[any]struct{})
+	}
+	a.postponeSet[id] = struct{}{}
+}
+
+func (a *ActorControl) hasPostpone(id any) bool {
+	_, ok := a.postponeSet[id]
+	return ok
+}
+
+// APostOnce 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
+// 返回 ActorBusyError 或 ActorPostponeError 表示消息因对方正忙而没有成功投递，调用方可以再次发送同一请求。
+// 返回其它错误如消息路由错误等，通常调用方业务逻辑不应重试。
+func APostOnce[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
+	a.poseponePost()
+	traceLogSend(a.traceSend, a.ilogger, "send postonce", id, reqTypeOf(req), req)
+	if a.hasPostpone(id) {
+		err := &ActorPostponeError{Id: id}
+		a.ilogger.Warn("postonce postpone error")
+		return err
+	}
+	err := FPost(a.Manager(), a.fromSeq(a.from), id, req)
+	if err != nil {
+		a.ilogger.Warn("postonce fail", "err", err)
+	}
+	return err
+}
+
+// APost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。对方忙则延后重试。
+// 返回 ActorBusyError 或 ActorPostponeError 表示消息已进入延迟队列，将自动重试，调用方不应再次发送同一请求，否则会重复。
+// 返回其它错误如消息路由错误等，不进入延迟队列，不会自动重试，通常调用方业务逻辑也不应重试。
+// 与普通Post类似，保证消息顺序但不保证逻辑顺序。延后期间本actor将转而执行后续逻辑，特别是能处理对方发来的请求，避免死锁。
+func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (err error) {
+	a.poseponePost()
+	traceLogSend(a.traceSend, a.ilogger, "send post", id, reqTypeOf(req), req)
+	if a.hasPostpone(id) {
+		// 仍然很忙，排队等待
+		err = &ActorPostponeError{Id: id}
+		a.ilogger.Info("post postpone")
+	} else {
+		// 无排队，尝试立即发送
 		err = FPost(a.Manager(), a.fromSeq(a.from), id, req)
 		if err == nil {
 			return
-		} else {
-			a.ilogger.Warn("post fail", "retry", i, "err", err)
-			if _, ok := err.(*ActorBusyError); !ok {
-				return
-			}
 		}
+		if _, ok := err.(*ActorBusyError); !ok {
+			// 不可恢复错误
+			a.ilogger.Warn("post fail", "err", err)
+			return
+		}
+		// 恰好忙起来了呢
+		a.ilogger.Warn("post busy", "err", err)
 	}
+	appendPostpone(a, id, req)
 	return
 }
 
 // ACall 向指定 Group 中的 Actor 发送请求，结果作为返回值返回（R, error）。
+// 返回 ActorBusyError 或 ActorPostponeError 表示消息因对方正忙而没有成功投递，调用方可以再次发送同一请求。
+// 返回其它错误如消息路由错误、对端处理错误等，通常调用方业务逻辑不应重试。
 func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (rep R, err error) {
-	traceLogSend(a.traceSend, a.ilogger, "send call", id, reqTypeOf(req), req)
 	ctx := a.Context()
 	mgr := a.Manager()
 	for i := range 3 {
@@ -196,7 +279,13 @@ func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a
 			t := time.Duration(i*i*20) * time.Millisecond
 			time.Sleep(t)
 		}
-
+		a.poseponePost()
+		traceLogSend(a.traceSend, a.ilogger, "send call", id, reqTypeOf(req), req)
+		if a.hasPostpone(id) {
+			err = &ActorPostponeError{Id: id}
+			a.ilogger.Info("call postpone", "retry", i, "err", err)
+			continue
+		}
 		rep, err = FCall(ctx, mgr, a.fromSeq(a.from), id, req)
 		if err == nil {
 			a.ilogger.Info("recv reply", "rep", rep)
@@ -208,7 +297,97 @@ func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a
 			}
 		}
 	}
+	a.ilogger.Warn("call retry fail", "err", err)
 	return
+}
+
+func splitPostpone[A ActorId](a *ActorControl, ids []A) (p []A, np []A) {
+	for _, id := range ids {
+		if a.hasPostpone(id) {
+			p = append(p, id)
+		} else {
+			np = append(np, id)
+		}
+	}
+	return
+}
+
+func splitIdErr[A ActorId](list []IdErr[A]) (p []A, np []IdErr[A]) {
+	for _, idErr := range list {
+		err := idErr.Err
+		if err == nil {
+			np = append(np, idErr)
+		} else if _, ok := err.(*ActorBusyError); !ok {
+			np = append(np, idErr)
+		} else {
+			p = append(p, idErr.Id)
+		}
+	}
+	return
+}
+
+// AMulticastOnce 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+// 返回列表中 ActorBusyError 或 ActorPostponeError 表示消息因对方正忙而没有成功投递，调用方可以再次发送同一请求。
+// 返回其它错误如消息路由错误等，通常调用方业务逻辑不应重试。
+func AMulticastOnce[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) ([]IdErr[A], error) {
+	a.poseponePost()
+	traceLogSend(a.traceSend, a.ilogger, "multicast", ids, reqTypeOf(req), req)
+	p, np := splitPostpone(a, ids)
+	mgr := a.Manager()
+	list, err := FMulticast(mgr, a.fromSeq(a.from), np, req)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range p {
+		err := &ActorPostponeError{Id: id}
+		list = append(list, IdErr[A]{Id: id, Err: err})
+	}
+	return list, nil
+}
+
+// AMulticastOnceKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func AMulticastOnceKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) ([]IdErr[A], error) {
+	keys := make([]A, 0, len(ids))
+	for k := range ids {
+		keys = append(keys, k)
+	}
+	return AMulticastOnce(a, keys, req)
+}
+
+// AMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。对方忙则延后重试。
+// 返回列表中 ActorBusyError 或 ActorPostponeError 表示消息已进入延迟队列，将自动重试，调用方不应再次发送同一请求，否则会重复。
+// 返回其它错误如消息路由错误等，不进入延迟队列，不会自动重试，通常调用方业务逻辑也不应重试。
+func AMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) ([]IdErr[A], error) {
+	a.poseponePost()
+	traceLogSend(a.traceSend, a.ilogger, "multicast", ids, reqTypeOf(req), req)
+	p, np := splitPostpone(a, ids)
+	mgr := a.Manager()
+	list, err := FMulticast(mgr, a.fromSeq(a.from), np, req)
+	if err != nil {
+		return nil, err
+	}
+	b, nb := splitIdErr(list)
+	result := nb
+	for _, id := range b {
+		err := &ActorBusyError{Id: id}
+		result = append(result, IdErr[A]{Id: id, Err: err})
+		appendPostpone(a, id, req)
+	}
+	for _, id := range p {
+		err := &ActorPostponeError{Id: id}
+		result = append(result, IdErr[A]{Id: id, Err: err})
+		appendPostpone(a, id, req)
+	}
+	return result, nil
+}
+
+// AMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
+func AMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) ([]IdErr[A], error) {
+	keys := make([]A, 0, len(ids))
+	for k := range ids {
+		keys = append(keys, k)
+	}
+	return AMulticast(a, keys, req)
 }
 
 // ABroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
@@ -216,20 +395,4 @@ func ABroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 a
 	traceLogSend(a.traceSend, a.ilogger, "send broadcast", nil, reqTypeOf(req), req)
 	mgr := a.Manager()
 	return FBroadcast(mgr, a.fromSeq(a.from), req)
-}
-
-// AMulticast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func AMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) (int, error) {
-	traceLogSend(a.traceSend, a.ilogger, "multicast", ids, reqTypeOf(req), req)
-	mgr := a.Manager()
-	return FMulticast(mgr, a.fromSeq(a.from), ids, req)
-}
-
-// AMulticastKeys 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func AMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids map[A]X, req Q) (int, error) {
-	keys := make([]A, 0, len(ids))
-	for k := range ids {
-		keys = append(keys, k)
-	}
-	return AMulticast(a, keys, req)
 }
