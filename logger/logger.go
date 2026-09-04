@@ -2,7 +2,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -33,6 +32,23 @@ func (h *TracingHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 // Handle 处理单条日志记录
 func (h *TracingHandler) Handle(_ context.Context, r slog.Record) error {
+	builder := &strings.Builder{}
+
+	// 时间
+	builder.WriteString(r.Time.Local().Format("0102.150405.000"))
+	builder.WriteByte(' ')
+
+	// 级别
+	builder.WriteString(levelAbbr(r.Level))
+	builder.WriteByte(' ')
+
+	// 标签
+	builder.WriteString(h.tag)
+	builder.WriteByte(' ')
+
+	// 消息
+	builder.WriteString(r.Message)
+
 	parts := make([]string, 0, 4+r.NumAttrs())
 	// 1. 时间：本地时间，格式 "Jan 2 15:04:05.000"（省略年份）
 	timeStr := r.Time.Local().Format("0102.150405.000")
@@ -50,12 +66,15 @@ func (h *TracingHandler) Handle(_ context.Context, r slog.Record) error {
 
 	// 5. 参数：Record 中的属性
 	r.Attrs(func(a slog.Attr) bool {
-		parts = append(parts, fmt.Sprintf("%s=%s", a.Key, a.Value.String()))
+		builder.WriteByte(' ')
+		builder.WriteString(a.Key)
+		builder.WriteByte('=')
+		builder.WriteString(StructToJSONString(a.Value.Any(), r.Level))
 		return true
 	})
 
-	// 组装最终输出（各部分用空格分隔）
-	line := strings.Join(parts, " ") + "\n"
+	builder.WriteByte('\n')
+	line := builder.String()
 	_, err := h.out.Write([]byte(line))
 	return err
 }
