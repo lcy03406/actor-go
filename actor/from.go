@@ -9,6 +9,10 @@ func (f From) String() string {
 	return f.Origin + ":" + f.ReqSeq
 }
 
+func OriginFrom(origin string) From {
+	return From{Origin: origin, ReqSeq: origin}
+}
+
 func MakeFrom[A ActorId](id A, seq string) From {
 	reqSeq := actorNameOf(id) + "." + seq
 	return From{Origin: reqSeq, ReqSeq: reqSeq}

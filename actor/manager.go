@@ -52,7 +52,7 @@ func (m *Manager) Logger() *slog.Logger {
 // newSeq 返回一个新序号。
 func (m *Manager) newFrom() From {
 	seq := fmt.Sprintf("%s.%d", m.name, m.seq.Add(1))
-	return From{Origin: seq, ReqSeq: seq}
+	return OriginFrom(seq)
 }
 
 type TraceOption int
