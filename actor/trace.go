@@ -2,26 +2,17 @@ package actor
 
 import (
 	"log/slog"
-
-	"github.com/domonda/go-pretty"
 )
 
-var brief = pretty.Printer{
-	MaxStringLength: 20, // 字符串最长200字符
-	MaxSliceLength:  3,  // 切片最多显示20个元素
-}
-
-var verbose = pretty.Printer{}
-
-func traceLogSend(option TraceOption, logger *slog.Logger, title string, to any, reqType string, req any) {
+func traceLogSend(option TraceOption, logger *slog.Logger, title string, next From, to any, reqType string, req any) {
 	switch option {
 	case TraceNone:
 		return
 	case TraceHead:
-		logger.Info(title, "to", brief.Sprint(to), "req", reqType)
+		logger.Info(title, "next", next.String(), "to", to, "req", reqType)
 	case TraceBrief:
-		logger.Info(title, "to", brief.Sprint(to), "req", reqType, "msg", brief.Sprint(req))
+		logger.Info(title, "next", next.String(), "to", to, "req", reqType, "msg", req)
 	case TraceVerbose:
-		logger.Info(title, "to", verbose.Sprint(to), "req", reqType, "msg", verbose.Sprint(req))
+		logger.Info(title, "next", next.String(), "to", to, "req", reqType, "msg", req)
 	}
 }

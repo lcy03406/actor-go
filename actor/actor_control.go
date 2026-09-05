@@ -202,8 +202,9 @@ func (a *ActorControl) poseponePost() {
 
 func appendPostpone[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) {
 	fn := func() error {
-		traceLogSend(a.traceSend, a.ilogger, "postpone post", id, reqTypeOf(req), req)
-		err := FPost(a.Manager(), a.fromSeq(a.from), id, req)
+		next := a.fromSeq(a.from)
+		traceLogSend(a.traceSend, a.ilogger, "postpone post", next, id, reqTypeOf(req), req)
+		err := FPost(a.Manager(), next, id, req)
 		if err != nil {
 			a.ilogger.Warn("postpone fail", "err", err)
 		}
@@ -226,13 +227,14 @@ func (a *ActorControl) hasPostpone(id any) bool {
 // 返回其它错误如消息路由错误等，通常调用方业务逻辑不应重试。
 func APostOnce[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) error {
 	a.poseponePost()
-	traceLogSend(a.traceSend, a.ilogger, "send postonce", id, reqTypeOf(req), req)
 	if a.hasPostpone(id) {
 		err := &ActorPostponeError{Id: id}
 		a.ilogger.Warn("postonce postpone error")
 		return err
 	}
-	err := FPost(a.Manager(), a.fromSeq(a.from), id, req)
+	next := a.fromSeq(a.from)
+	traceLogSend(a.traceSend, a.ilogger, "send postonce", next, id, reqTypeOf(req), req)
+	err := FPost(a.Manager(), next, id, req)
 	if err != nil {
 		a.ilogger.Warn("postonce fail", "err", err)
 	}
@@ -245,14 +247,15 @@ func APostOnce[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 an
 // 与普通Post类似，保证消息顺序但不保证逻辑顺序。延后期间本actor将转而执行后续逻辑，特别是能处理对方发来的请求，避免死锁。
 func APost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) (err error) {
 	a.poseponePost()
-	traceLogSend(a.traceSend, a.ilogger, "send post", id, reqTypeOf(req), req)
 	if a.hasPostpone(id) {
 		// 仍然很忙，排队等待
 		err = &ActorPostponeError{Id: id}
 		a.ilogger.Info("post postpone")
 	} else {
 		// 无排队，尝试立即发送
-		err = FPost(a.Manager(), a.fromSeq(a.from), id, req)
+		next := a.fromSeq(a.from)
+		traceLogSend(a.traceSend, a.ilogger, "send post", next, id, reqTypeOf(req), req)
+		err = FPost(a.Manager(), next, id, req)
 		if err == nil {
 			return
 		}
@@ -280,13 +283,14 @@ func ACall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a
 			time.Sleep(t)
 		}
 		a.poseponePost()
-		traceLogSend(a.traceSend, a.ilogger, "send call", id, reqTypeOf(req), req)
 		if a.hasPostpone(id) {
 			err = &ActorPostponeError{Id: id}
 			a.ilogger.Info("call postpone", "retry", i, "err", err)
 			continue
 		}
-		rep, err = FCall(ctx, mgr, a.fromSeq(a.from), id, req)
+		next := a.fromSeq(a.from)
+		traceLogSend(a.traceSend, a.ilogger, "send call", next, id, reqTypeOf(req), req)
+		rep, err = FCall(ctx, mgr, next, id, req)
 		if err == nil {
 			a.ilogger.Info("recv reply", "rep", rep)
 			return
@@ -331,10 +335,11 @@ func splitIdErr[A ActorId](list []IdErr[A]) (p []A, np []IdErr[A]) {
 // 返回其它错误如消息路由错误等，通常调用方业务逻辑不应重试。
 func AMulticastOnce[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) ([]IdErr[A], error) {
 	a.poseponePost()
-	traceLogSend(a.traceSend, a.ilogger, "multicast", ids, reqTypeOf(req), req)
 	p, np := splitPostpone(a, ids)
 	mgr := a.Manager()
-	list, err := FMulticast(mgr, a.fromSeq(a.from), np, req)
+	next := a.fromSeq(a.from)
+	traceLogSend(a.traceSend, a.ilogger, "multicast", next, ids, reqTypeOf(req), req)
+	list, err := FMulticast(mgr, next, np, req)
 	if err != nil {
 		return nil, err
 	}
@@ -359,10 +364,10 @@ func AMulticastOnceKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0
 // 返回其它错误如消息路由错误等，不进入延迟队列，不会自动重试，通常调用方业务逻辑也不应重试。
 func AMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, ids []A, req Q) ([]IdErr[A], error) {
 	a.poseponePost()
-	traceLogSend(a.traceSend, a.ilogger, "multicast", ids, reqTypeOf(req), req)
 	p, np := splitPostpone(a, ids)
-	mgr := a.Manager()
-	list, err := FMulticast(mgr, a.fromSeq(a.from), np, req)
+	next := a.fromSeq(a.from)
+	traceLogSend(a.traceSend, a.ilogger, "multicast", next, ids, reqTypeOf(req), req)
+	list, err := FMulticast(a.Manager(), next, np, req)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +397,7 @@ func AMulticastKeys[X any, A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q
 
 // ABroadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
 func ABroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, req Q) (int, error) {
-	traceLogSend(a.traceSend, a.ilogger, "send broadcast", nil, reqTypeOf(req), req)
-	mgr := a.Manager()
-	return FBroadcast(mgr, a.fromSeq(a.from), req)
+	next := a.fromSeq(a.from)
+	traceLogSend(a.traceSend, a.ilogger, "send broadcast", next, nil, reqTypeOf(req), req)
+	return FBroadcast(a.Manager(), next, req)
 }
