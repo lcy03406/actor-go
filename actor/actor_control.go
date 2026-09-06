@@ -19,10 +19,16 @@ type ActorControl struct {
 	timerFn     func(i *timerStub) func()
 	active      bool   // Actor 运行状态：true=激活，false=空闲。 spawn 时默认为 false，由用户调用 Open 翻转为 true。
 	OnQuit      func() //用户注册，退出时框架调用
-	timers      map[TimerId]*time.Timer
+	timers      map[TimerId]timerItem
 	timerId     TimerId
 	postpone    []postponeItem
 	postponeSet map[any]struct{}
+}
+
+type timerItem struct {
+	timer *time.Timer
+	from  From
+	name  string
 }
 
 type postponeItem struct {
@@ -33,7 +39,7 @@ type postponeItem struct {
 func (a *ActorControl) clear() {
 	for len(a.timers) > 0 {
 		for id, timer := range a.timers {
-			timer.Stop()
+			timer.timer.Stop()
 			delete(a.timers, id)
 		}
 	}
@@ -122,9 +128,9 @@ func (a *ActorControl) Open() {
 }
 
 // Timer 在指定延迟后向 Actor 自身发送回调，返回可取消的 Timer Id。
-func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
+func (a *ActorControl) Timer(name string, d time.Duration, fn func()) TimerId {
 	if a.timers == nil {
-		a.timers = make(map[TimerId]*time.Timer)
+		a.timers = make(map[TimerId]timerItem)
 	}
 	// 从 timerId+1 开始线性探查下一个空位；到达 math.MaxInt 后回绕到 1，
 	// 避免 id++ 溢出到 math.MinInt。若回绕一圈仍无空位（理论上不可能，
@@ -149,11 +155,12 @@ func (a *ActorControl) Timer(d time.Duration, fn func()) TimerId {
 		}
 	}
 	a.timerId = id
+	from := a.fromSeq(a.from)
 	i := &timerStub{fn, id, nil}
 	timer := time.AfterFunc(d, a.timerFn(i))
 	i.t = timer
-	a.timers[id] = timer
-	a.ilogger.Debug("timer start", "timer", id)
+	a.timers[id] = timerItem{timer, from, name}
+	a.ilogger.Debug("timer start", "next", from, "timer", name, "id", id)
 	return id
 }
 
@@ -166,9 +173,9 @@ func (a *ActorControl) StopTimer(timerId TimerId) bool {
 	if !ok {
 		return false
 	}
-	timer.Stop()              //不用管Stop结果，即使取消失败也没事
-	delete(a.timers, timerId) //只要从map里拿掉，就不会执行回调函数
-	a.ilogger.Debug("timer stop", "timer", timerId)
+	timer.timer.Stop()        //不用管Stop结果，即使取消失败也没事
+	delete(a.timers, timerId) //只要从map里拿掉，就不会执行Handler回调函数
+	a.ilogger.Debug("timer stop", "next", timer.from, "timer", timer.name, "id", timerId)
 	return true
 }
 

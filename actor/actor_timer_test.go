@@ -24,7 +24,7 @@ func (*testTimerLogin) ReqType(_ TestActorId, _ actor.OkReply) string { return "
 func (req *testTimerLogin) Handle(a *actor.ActorContext[TestActorId, TestActorData], _ bool) (actor.OkReply, error) {
 	a.Open() // spawn 后保持活跃（框架不再自动激活）
 	a.SetState(TestActorData{Int: req.Data.Int})
-	a.Timer(50*time.Millisecond, func() {
+	a.Timer("test", 50*time.Millisecond, func() {
 		a.State().Int += 100
 	})
 	return actor.OK, nil
@@ -41,7 +41,7 @@ func (*testTimerCancelLogin) ReqType(_ TestActorId, _ actor.OkReply) string {
 func (req *testTimerCancelLogin) Handle(a *actor.ActorContext[TestActorId, TestActorData], _ bool) (actor.OkReply, error) {
 	a.Open() // spawn 后保持活跃（框架不再自动激活）
 	a.SetState(TestActorData{Int: req.Data.Int})
-	timer := a.Timer(50*time.Millisecond, func() {
+	timer := a.Timer("test", 50*time.Millisecond, func() {
 		a.State().Int += 100
 	})
 	a.StopTimer(timer)
@@ -55,7 +55,7 @@ type testLogoutTimer struct {
 
 func (*testLogoutTimer) ReqType(_ TestActorId, _ actor.OkReply) string { return "TestLogoutTimer" }
 func (req *testLogoutTimer) Handle(a *actor.ActorContext[TestActorId, TestActorData], _ bool) (actor.OkReply, error) {
-	a.Timer(100*time.Millisecond, func() {
+	a.Timer("test", 100*time.Millisecond, func() {
 		if req.Fired != nil {
 			req.Fired.Store(true)
 		}
@@ -75,7 +75,7 @@ func (*testLoginTimer) ReqType(_ TestActorId, _ actor.OkReply) string { return "
 func (req *testLoginTimer) Handle(a *actor.ActorContext[TestActorId, TestActorData], _ bool) (actor.OkReply, error) {
 	a.Open()
 	a.SetState(TestActorData{Int: req.Data.Int})
-	a.Timer(100*time.Millisecond, func() {
+	a.Timer("test", 100*time.Millisecond, func() {
 		req.Fired.Store(true)
 	})
 	if req.Done != nil {

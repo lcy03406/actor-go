@@ -64,7 +64,7 @@ func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 
 		// 启动定时存盘（续租 + 落盘）。退出时框架自动取消定时器。
 		if pm != nil && pm.persistInterval > 0 {
-			ctx.Timer(pm.persistInterval, func() {
+			ctx.Timer("grain_auto_persist", pm.persistInterval, func() {
 				if err := ctx.State().Persist(ctx); err != nil {
 					ctx.Logger().Warn("grain auto persist failed", "err", err)
 				}

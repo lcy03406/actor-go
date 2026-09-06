@@ -50,21 +50,6 @@ func (h *TracingHandler) Handle(_ context.Context, r slog.Record) error {
 	// 消息
 	builder.WriteString(r.Message)
 
-	parts := make([]string, 0, 4+r.NumAttrs())
-	// 1. 时间：本地时间，格式 "Jan 2 15:04:05.000"（省略年份）
-	timeStr := r.Time.Local().Format("0102.150405.000")
-	parts = append(parts, timeStr)
-
-	// 2. 级别：三字母缩写
-	levelStr := levelAbbr(r.Level)
-	parts = append(parts, levelStr)
-
-	// 4. 标签
-	parts = append(parts, h.tag)
-
-	// 4. 消息
-	parts = append(parts, r.Message)
-
 	// 5. 参数：Record 中的属性
 	r.Attrs(func(a slog.Attr) bool {
 		builder.WriteByte(' ')

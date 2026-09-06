@@ -20,7 +20,7 @@ func (i timerInvoke[A, S]) Allow(id A, spawning bool) bool {
 
 func (i timerInvoke[A, S]) Invoke(actor *ActorContext[A, S], spawning bool) {
 	timer, ok := actor.ctrl.timers[i.id]
-	if !ok || timer != i.t {
+	if !ok || timer.timer != i.t {
 		return
 	}
 	delete(actor.ctrl.timers, i.id)
