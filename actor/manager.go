@@ -128,11 +128,12 @@ func findHandler[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 
 
 // Post 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
 func Post[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, id A, req Q) error {
-	return FPost(mgr, mgr.newFrom(), id, req)
+	return FPost(mgr, mgr.logger, mgr.newFrom(), id, req)
 }
 
 // FPost 向指定 Group 中的 Actor 发送 fire-and-forget 消息。
-func FPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from From, id A, req Q) error {
+func FPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, logger *slog.Logger, from From, id A, req Q) error {
+	traceLogSend(logger, "post", from, id, reqTypeOf(req), req)
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {
 		return &GroupNotFoundError{id}
@@ -147,10 +148,11 @@ func FPost[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](m
 //	reply, err := actor.Call[TestActorId](ctx, mgr, id, &TestAdd{Add: 10})
 //	if err != nil { ... }
 func Call[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, id A, req Q) (R, error) {
-	return FCall(ctx, mgr, mgr.newFrom(), id, req)
+	return FCall(ctx, mgr, mgr.logger, mgr.newFrom(), id, req)
 }
 
-func FCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, from From, id A, req Q) (R, error) {
+func FCall[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, logger *slog.Logger, from From, id A, req Q) (R, error) {
+	traceLogSend(logger, "call", from, id, reqTypeOf(req), req)
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {
 		return nil, &GroupNotFoundError{id}
@@ -178,10 +180,11 @@ func waitResult[R PtrReply[R0], R0 any](ctx context.Context, ch <-chan result[R,
 // 在返回错误前自行释放。其类型推导与错误处理语义与 Call 一致，差别仅在于回复需支持可释放。
 // 详见 SafeReply 的注释。
 func SafeCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, id A, req Q) (R, error) {
-	return SafeFCall(ctx, mgr, mgr.newFrom(), id, req)
+	return SafeFCall(ctx, mgr, mgr.logger, mgr.newFrom(), id, req)
 }
 
-func SafeFCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, from From, id A, req Q) (R, error) {
+func SafeFCall[A ActorId, Q Request[A, R, Q0, R0], R SafeReply[R0], Q0 any, R0 any](ctx context.Context, mgr *Manager, logger *slog.Logger, from From, id A, req Q) (R, error) {
+	traceLogSend(logger, "safecall", from, id, reqTypeOf(req), req)
 	gh, err := findHandler(mgr, id, req)
 	if err != nil {
 		return nil, &GroupNotFoundError{id}
@@ -210,11 +213,12 @@ func safeResult[R SafeReply[R0], R0 any](ctx context.Context, ch chan result[R, 
 
 // Broadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
 func Broadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, req Q) (int, error) {
-	return FBroadcast(mgr, mgr.newFrom(), req)
+	return FBroadcast(mgr, mgr.logger, mgr.newFrom(), req)
 }
 
 // Broadcast 向指定 Group 的所有 Actor 广播 fire-and-forget 消息。
-func FBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from From, req Q) (int, error) {
+func FBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, logger *slog.Logger, from From, req Q) (int, error) {
+	traceLogSend(logger, "broadcast", from, nil, reqTypeOf(req), req)
 	var id0 A
 	gh, err := findHandler(mgr, id0, req)
 	if err != nil {
@@ -225,11 +229,12 @@ func FBroadcast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 a
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
 func Multicast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, ids []A, req Q) ([]IdErr[A], error) {
-	return FMulticast(mgr, mgr.newFrom(), ids, req)
+	return FMulticast(mgr, mgr.logger, mgr.newFrom(), ids, req)
 }
 
 // Multicast 向指定 Group 的一组 Actor 发送 fire-and-forget 消息。
-func FMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, from From, ids []A, req Q) ([]IdErr[A], error) {
+func FMulticast[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](mgr *Manager, logger *slog.Logger, from From, ids []A, req Q) ([]IdErr[A], error) {
+	traceLogSend(logger, "multicast", from, nil, reqTypeOf(req), req)
 	if len(ids) == 0 {
 		return nil, nil
 	}

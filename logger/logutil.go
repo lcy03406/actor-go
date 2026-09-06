@@ -1,3 +1,4 @@
+// logutil.go 日志序列化
 package logger
 
 import (
@@ -11,10 +12,17 @@ import (
 
 // fieldMeta 缓存结构体字段元信息（与之前相同）
 type fieldMeta struct {
-	JSONName string
-	LogTag   string
-	Index    int
-	Type     reflect.Type
+	Name   string
+	Index  int
+	Type   reflect.Type
+	LogTag fieldOptions
+}
+
+type fieldOptions struct {
+	skip      bool
+	mask      bool
+	omitempty bool
+	debug     bool
 }
 
 var fieldCache sync.Map
@@ -31,22 +39,33 @@ func getFieldMetas(typ reflect.Type) []fieldMeta {
 			continue
 		}
 		logTag := field.Tag.Get("log")
-		jsonName := field.Name
-		if jsonTag := field.Tag.Get("json"); jsonTag != "" {
-			parts := strings.Split(jsonTag, ",")
-			if parts[0] != "" && parts[0] != "-" {
-				jsonName = parts[0]
-			}
-		}
 		metas = append(metas, fieldMeta{
-			JSONName: jsonName,
-			LogTag:   logTag,
-			Index:    i,
-			Type:     field.Type,
+			Name:   field.Name,
+			Index:  i,
+			Type:   field.Type,
+			LogTag: getFieldOptions(logTag),
 		})
 	}
 	fieldCache.Store(typ, metas)
 	return metas
+}
+
+func getFieldOptions(logTag string) fieldOptions {
+	tags := strings.Split(logTag, ",")
+	options := fieldOptions{}
+	for _, opt := range tags {
+		switch opt {
+		case "-":
+			options.skip = true
+		case "mask":
+			options.mask = true
+		case "omitempty":
+			options.omitempty = true
+		case "debug":
+			options.debug = true
+		}
+	}
+	return options
 }
 
 // StructToJSONString 将结构体转换为 JSON 格式的字符串，
@@ -125,43 +144,35 @@ func writeStruct(b *strings.Builder, val reflect.Value, level slog.Level) {
 
 		// 根据标签决定是否跳过
 		tag := m.LogTag
-		if tag == "-" {
+		if tag.skip {
 			continue
 		}
 
 		// 处理 omitempty
-		if strings.Contains(tag, "omitempty") && fieldVal.IsZero() {
+		if tag.omitempty && fieldVal.IsZero() {
 			continue
 		}
 
 		// 处理 debug 级别
-		if tag == "debug" && level < slog.LevelDebug {
+		if tag.debug && level <= slog.LevelDebug {
 			continue
 		}
 
-		// 处理 mask（脱敏）
-		if tag == "mask" {
-			if needComma {
-				b.WriteByte(',')
-			}
-			b.WriteByte('"')
-			b.WriteString(m.JSONName)
-			b.WriteString(`":"***"`)
-			needComma = true
-			continue
-		}
-
-		// 正常输出字段
 		if needComma {
 			b.WriteByte(',')
 		}
 		// 写入 key
 		b.WriteByte('"')
-		b.WriteString(m.JSONName)
+		b.WriteString(m.Name)
 		b.WriteString(`":`)
 
-		// 递归写入 value
-		writeValue(b, fieldVal, level)
+		if tag.mask {
+			// 处理 mask 脱敏
+			b.WriteString(`":"***"`)
+		} else {
+			// 递归写入 value
+			writeValue(b, fieldVal, level)
+		}
 		needComma = true
 	}
 
