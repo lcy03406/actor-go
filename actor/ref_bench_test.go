@@ -146,9 +146,8 @@ func BenchmarkCallNoContention(b *testing.B) {
 	id := refBenchSpawn(mgr, 1)
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := actor.Call(ctx, mgr, id, &RefBenchAdd{V: 1}); err != nil {
 			b.Fatal(err)
 		}
@@ -167,9 +166,8 @@ func BenchmarkRefCallNoContention(b *testing.B) {
 	defer ref.Release()
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := actor.RefCall(ctx, ref, &RefBenchAdd{V: 1}); err != nil {
 			b.Fatal(err)
 		}
@@ -182,9 +180,8 @@ func BenchmarkPostNoContention(b *testing.B) {
 	setupRefBenchManager(mgr)
 	id := refBenchSpawn(mgr, 1)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = actor.Post(mgr, id, &RefBenchPing{})
 	}
 }
@@ -200,9 +197,8 @@ func BenchmarkRefPostNoContention(b *testing.B) {
 	}
 	defer ref.Release()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = actor.RefPost(ref, &RefBenchPing{})
 	}
 }
@@ -295,9 +291,8 @@ func BenchmarkAcquireAndCall(b *testing.B) {
 	sourceId := refBenchSpawn(mgr, 2)
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		reply, err := actor.Call(ctx, mgr, sourceId, &refBenchCallReq{TargetId: targetId})
 		if err != nil {
 			b.Fatal(err)
@@ -313,9 +308,8 @@ func BenchmarkAcquireAndPost(b *testing.B) {
 	targetId := refBenchSpawn(mgr, 1)
 	sourceId := refBenchSpawn(mgr, 2)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := actor.Call(context.Background(), mgr, sourceId, &refBenchPostReq{TargetId: targetId}); err != nil {
 			b.Fatal(err)
 		}

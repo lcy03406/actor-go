@@ -66,9 +66,9 @@ func BenchmarkV2CallCPUWorkload(b *testing.B) {
 	actor.Call(context.Background(), mgr, id, &FibReq{N: 1})
 
 	ctx := context.Background()
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := actor.Call(ctx, mgr, id, &FibReq{N: 20}); err != nil {
 			b.Fatal(err)
 		}
@@ -119,9 +119,9 @@ func BenchmarkV2CallStringWorkload(b *testing.B) {
 
 	input := "the quick brown fox jumps over the lazy dog"
 	ctx := context.Background()
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := actor.Call(ctx, mgr, id, &StrProcReq{Input: input}); err != nil {
 			b.Fatal(err)
 		}
@@ -170,9 +170,9 @@ func BenchmarkV2CallMapWorkload(b *testing.B) {
 	actor.Call(context.Background(), mgr, id, &MapOpsReq{Op: "set", Key: "init", Value: 0})
 
 	ctx := context.Background()
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		key := fmt.Sprintf("key_%d", i%100)
 		op := "get"
 		if i%3 == 0 {
@@ -578,9 +578,8 @@ func BenchmarkV2ActorLifecycle(b *testing.B) {
 
 	const opsPerLifecycle = 5
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		id := WorkloadId{Id: i}
 		_ = actor.Post(mgr, id, &WorkloadSpawn{Init: 0})
 		actor.Call(ctx, mgr, id, &MapOpsReq{Op: "set", Key: "spawn_check", Value: 0})

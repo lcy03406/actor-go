@@ -99,9 +99,8 @@ func BenchmarkV2Call(b *testing.B) {
 	id := benchSpawnV2(mgr, 1)
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := actor.Call(ctx, mgr, id, &BenchAdd{V: 1}); err != nil {
 			b.Fatal(err)
 		}
@@ -123,9 +122,8 @@ func BenchmarkV2Post(b *testing.B) {
 	})
 	id := benchSpawnV2(mgr, 1)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = actor.Post(mgr, id, &BenchPing{})
 	}
 }
@@ -152,9 +150,8 @@ func BenchmarkV2PostThenCall(b *testing.B) {
 	id := benchSpawnV2(mgr, 1)
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = actor.Post(mgr, id, &BenchPing{})
 		actor.Call(ctx, mgr, id, &BenchAdd{V: 0})
 	}
@@ -186,9 +183,8 @@ func BenchmarkV2Spawn(b *testing.B) {
 	setupBenchManagerV2(mgr)
 	ctx := context.Background()
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		// 只用整数 ID，避免 fmt.Sprintf 热路径分配干扰测量
 		id := BenchId{ServerId: i}
 		if _, err := actor.Call(ctx, mgr, id, &BenchLoginWithReply{Init: 0}); err != nil {
@@ -316,9 +312,8 @@ func BenchmarkV2Multicast(b *testing.B) {
 		actor.Call(ctx, mgr, ids[i], &BenchAdd{V: 0})
 	}
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = actor.Multicast(mgr, ids, &BenchPing{})
 	}
 }
