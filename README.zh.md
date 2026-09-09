@@ -67,6 +67,10 @@ actor-go/
 │   ├── membership.go         # Membership 接口 + 事件
 │   ├── placement.go          # PlacementStrategy（一致性哈希、组感知）
 │   └── migration.go          # 所有权迁移（ShouldOwn）
+├── shared/                   # 共享数据（按需注册订阅 + 刷新推送 + 冷却合并）
+│   ├── cache.go              # Cache[R,A,S,T] / Snapshot[T] —— 读者缓存（首次读取自动订阅）
+│   ├── writer.go             # Versioned[R,T] / Write / Subscribe / ServeWriter —— 写方协议 + 冷却推送
+│   └── refresh.go            # Refresh[R,T] / RegisterRefresh —— 刷新推送（携带数据指针）
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── CHANGELOG.md
@@ -731,6 +735,49 @@ state.Deactivate(ctx)  // 保存 + 释放租约 + 退出
 - **Migration（迁移）**：`ShouldOwn(placement, members, selfID, actorType, actorId)`
   告知节点是否应当持有某个 Actor，用于驱动优雅的所有权交接（参见 `cluster_example`）。
 
+## 共享数据（订阅 + 刷新推送）
+
+`shared` 包为「读远多于写、可容忍最终一致」的共享数据（排行榜、公共配置、公告）提供通用框架：
+**按需注册订阅 + 刷新推送 + 冷却合并**，流程完全收口在框架内：
+
+- **写方**：注册 `ServeWriter` 后，一条标准 `Write` 消息完成「更新数据 + 版本推进 + 带冷却的自动推送」；
+- **读者**：注册 `RegisterRefresh` 后，首次 `Get` 自动向写方按需注册并取当前快照，此后写方推送的 `Refresh`（携带数据指针）直接更新本地缓存，读取不再触网。
+
+```go
+// ── 写方：State 持有 Versioned（数据+版本+读者注册表，零值可用）──
+type BoardState struct {
+    Data shared.Versioned[PlayerId, BoardData]
+}
+actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[BoardId, BoardState]) {
+    // WithCooldown：冷却期内多次写入合并为一次推送，读者最终拿到最新数据
+    shared.ServeWriter(b, func(s *BoardState) *shared.Versioned[PlayerId, BoardData] {
+        return &s.Data
+    }, shared.WithCooldown(50*time.Millisecond))
+})
+// 写入（任意位置一步完成）：
+actor.Post(mgr, boardId, &shared.Write[BoardId, BoardData]{Data: newData})
+
+// ── 读者：State 持有 Cache（零值可用），首次读取自动订阅 ──
+type PlayerState struct {
+    Board shared.Cache[PlayerId, BoardId, PlayerState, BoardData]
+}
+actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+    shared.RegisterRefresh(b, func(s *PlayerState) *shared.Cache[PlayerId, BoardId, PlayerState, BoardData] {
+        return &s.Board
+    })
+})
+// 读取（首次自动注册订阅取当前快照，此后命中本地缓存）：
+data, err := ctx.State().Board.Get(ctx, boardId)
+```
+
+**一致性语义（最终一致）**
+
+- **按需注册**：首次 `Get` 向写方 `Subscribe`，写方只推送给已注册读者（非广播）；
+- **刷新推送**：`Write` 后框架带冷却推送 `Refresh`（携带数据指针），读者直接替换缓存；冷却合并意味着读者可能跳过中间版本，但最终拿到最新数据；
+- **自愈**：读者被驱逐/消失后，写方在推送时自动清理其注册；读者重建后首次 `Get` 重新注册并取当前快照；
+- `Cache` / `Versioned` 非线程安全，只能在所属 actor 的 run goroutine 内访问；
+- 跨节点推送（`rpc` / `cluster`）可作为扩展方向。
+
 ## 设计亮点
 
 | 特性 | 说明 |
@@ -751,6 +798,7 @@ state.Deactivate(ctx)  // 保存 + 释放租约 + 退出
 | Codec 接口 | 易于替换序列化；支持 JSON、protobuf 等 |
 | 优雅关闭 | `Server.Shutdown(ctx)` 等待在途请求完成 |
 | 连接丢失 | `Client.Close()` 通过 `done` 通道通知所有等待中的调用 |
+| 共享数据框架 | `shared` 包：按需订阅 + 刷新推送 + 冷却合并，最终一致 |
 
 ## 许可证
 
