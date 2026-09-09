@@ -69,10 +69,11 @@ actor-go/
 │   ├── membership.go         # Membership interface + events
 │   ├── placement.go          # PlacementStrategy (consistent hash, group aware)
 │   └── migration.go          # ownership migration (ShouldOwn)
-├── shared/                   # shared data (on-demand subscription + refresh push + cooldown)
-│   ├── cache.go              # Cache[R,A,S,T] / Snapshot[T] — reader cache (auto-subscribe on first read)
-│   ├── writer.go             # Versioned[R,T] / Write / Subscribe / ServeWriter — writer protocol + cooldown push
-│   └── refresh.go            # Refresh[R,T] / RegisterRefresh — refresh push (carries data pointer)
+├── shared/                   # shared data container (owner publishes by key + readers subscribe by key)
+│   ├── key.go                # Define / Def[V] / Key[V] / KeyOption — key definitions bound to a value type
+│   ├── store.go              # Serve / storeId / sharded container Group and pub-sub handlers
+│   ├── owner.go              # Publish / PublishWait / Unpublish — owner side
+│   └── reader.go             # ServeReader / Reader / Watch / Fetch — reader side
 ├── LICENSE
 ├── CONTRIBUTING.md
 ├── CHANGELOG.md
@@ -789,59 +790,62 @@ across multiple nodes:
   tells a node whether it should own a given Actor, used to drive graceful
   ownership hand-off (see `cluster_example`).
 
-## Shared Data (Subscription + Refresh Push)
+## Shared Data (Publish / Subscribe by Key)
 
 The `shared` package is a general framework for read-heavy, eventually-consistent
-shared data (leaderboards, public config, announcements). It uses
-**on-demand subscription + refresh push + cooldown coalescing**, with the whole
-flow managed inside the framework:
+shared data (world seed, public config, family tech). It uses
+**owner publishes by key + readers subscribe by key + cooldown coalescing**, with the
+whole flow managed inside the framework.
 
-- **Writer**: after registering `ServeWriter`, one standard `Write` message performs
-  "update data + bump version + cooldown-aware automatic push";
-- **Reader**: after registering `RegisterRefresh`, the first `Get` automatically
-  subscribes to the writer and receives the current snapshot; subsequent pushes
-  (`Refresh`, carrying a data pointer) update the local cache directly — no more network.
+Three roles:
+
+- **Store**: a built-in sharded Group; projects cannot register handlers on it. It only
+  replies to requests and pushes via Post — it never Calls any actor, so it can never
+  take part in a call cycle (**deadlock-free by construction**). Data is in-memory;
+  owners re-publish after a restart;
+- **Owner**: the business actor that owns the authoritative data (`world` / `family`),
+  calling `Publish` when data changes;
+- **Reader**: embeds `shared.Reader` in its State; `Watch` subscribes on first use and
+  then serves from the local cache updated by pushes.
 
 ```go
-// ── Writer: hold a Versioned (data + version + reader registry, zero-value ready) ──
-type BoardState struct {
-    Data shared.Versioned[PlayerId, BoardData]
-}
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[BoardId, BoardState]) {
-    // WithCooldown: multiple writes within the window coalesce into one push
-    shared.ServeWriter(b, func(s *BoardState) *shared.Versioned[PlayerId, BoardData] {
-        return &s.Data
-    }, shared.WithCooldown(50*time.Millisecond))
-})
-// Write (one step from anywhere):
-actor.Post(mgr, boardId, &shared.Write[BoardId, BoardData]{Data: newData})
+// ── Define keys (value type bound at compile time; pattern is globally unique; may contain placeholders) ──
+var (
+    WorldSeed  = shared.Define[int64]("world/%s/seed", shared.Immutable())
+    FamilyTech = shared.Define[TechState]("family/%s/tech",
+        shared.WithCooldown(50*time.Millisecond), shared.WithTTL(30*time.Second))
+)
 
-// ── Reader: hold a Cache (zero-value ready), first read auto-subscribes ──
-type PlayerState struct {
-    Board shared.Cache[PlayerId, BoardId, PlayerState, BoardData]
-}
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-    shared.RegisterRefresh(b, func(s *PlayerState) *shared.Cache[PlayerId, BoardId, PlayerState, BoardData] {
-        return &s.Board
-    })
+// ── Startup: register the container Group (shard count must be consistent process-wide) ──
+shared.Serve(mgr, shared.Options{Shards: 4, Cooldown: 50 * time.Millisecond})
+
+// ── Owner publishes (authoritative data stays in the owner; the container only distributes) ──
+shared.Publish(ctx, WorldSeed.Of(worldID), s.Seed)
+
+// ── Reader: register once per Group, then subscribe to any key ──
+type RegionState struct{ Vars shared.Reader }
+actor.Serve(mgr, opts, func(b *actor.RegistryBuilder[RegionId, RegionState]) {
+    shared.ServeReader(b, func(s *RegionState) *shared.Reader { return &s.Vars })
 })
-// Read (auto-subscribe on first access, then served from local cache):
-data, err := ctx.State().Board.Get(ctx, boardId)
+seed, err := shared.Watch(ctx, &s.Vars, WorldSeed.Of(worldID)) // subscribe + local cache
+seed, err := shared.Fetch(ctx, WorldSeed.Of(worldID))          // strongly consistent read (no subscription)
 ```
 
 **Consistency semantics (eventual)**
 
-- **On-demand subscription**: the first `Get` sends `Subscribe` to the writer; the
-  writer pushes only to registered readers (no broadcast);
-- **Refresh push**: after `Write`, the framework pushes `Refresh` (carrying a data
-  pointer) with cooldown; readers replace their cache directly. Coalescing means a
-  reader may skip intermediate versions but always converges to the latest data;
-- **Self-healing**: when a reader is evicted/gone, the writer prunes its registration
-  on the next push; a reborn reader re-subscribes on its first `Get` and receives the
-  current snapshot;
-- `Cache` / `Versioned` are not thread-safe; access them only from the owning actor's
-  run goroutine;
-- Cross-node push (`rpc` / `cluster`) is a natural extension point.
+- **On-demand subscription**: the first `Watch` registers with the container, which
+  pushes only to registered readers (no broadcast);
+- **Cooldown coalescing**: multiple publishes within the cooldown window collapse into
+  one push; a reader may skip intermediate versions but always converges to the latest;
+- **Self-healing**: the container prunes readers whose push failed; a reborn reader
+  re-subscribes on its next `Watch`; keys defined with `WithTTL` are re-fetched after
+  the TTL expires (reconciliation);
+- **Strongly consistent reads**: use `Fetch` when every read must see the latest value
+  (e.g. ID allocation, validation) — `Watch` is the read-heavy path;
+- `Reader` is not thread-safe; access it only from the owning actor's run goroutine;
+- V should be immutable; if the owner keeps mutating a published value, use
+  `WithClone` to clone at publish time;
+- Cross-node distribution (`rpc` / `cluster`) is a natural extension point.
 
 ## Design Highlights
 
@@ -863,7 +867,7 @@ data, err := ctx.State().Board.Get(ctx, boardId)
 | Codec interface | Easy to swap serialization; supports JSON, protobuf, etc. |
 | Graceful shutdown | `Server.Shutdown(ctx)` waits for in-flight requests |
 | Connection loss | `Client.Close()` notifies all pending calls via `done` channel |
-| Shared data framework | `shared` package: on-demand subscription + refresh push + cooldown, eventually consistent |
+| Shared data container | `shared` package: publish/subscribe by key + cooldown push, deadlock-free leaf Group |
 
 ## License
 

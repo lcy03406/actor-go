@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `shared` 包重写为共享数据容器：移除 `Cache` / `Versioned` / `ServeWriter` /
+  `RegisterRefresh`（同一 Group 只能持有一份数据，多份会静默覆盖），改为按 key 的
+  发布订阅模型：`Define` / `Publish` / `ServeReader` / `Watch` / `Fetch`。
+  容器是框架内置的分片 Group，handler 由框架提供、只 Reply 并用 Post 推送，
+  不 Call 任何 actor，因此不可能形成调用环（无死锁）；支持一个 Group 订阅多个 key、
+  冷却合并推送、TTL 对账自愈、`WithClone` 发布时克隆。
+
 ## [0.1.0] - 2026-08-01
 
 ### Added
