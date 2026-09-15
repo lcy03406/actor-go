@@ -230,7 +230,14 @@ func (a *actorRuntime[A, S]) invokeBatch(buf []invokable[A, S], x int, ctx *Acto
 func (a *actorRuntime[A, S]) pumpMailbox(buffer []invokable[A, S]) []invokable[A, S] {
 	for {
 		select {
-		case m := <-a.mailbox:
+		case m, ok := <-a.mailbox:
+			if !ok {
+				// mailbox 已被 unhold 归零关闭。关闭后 select 的接收 case 永远就绪
+				// （返回零值），若无此检查将无限 append 零值接口——buf 无限增长直到
+				// OOM，且 default 分支永不可达，run 卡死在此永远回不到 closed 检查
+				// （2026-09-15 verify 全量 go test 偶发 40GB OOM 的根因）。
+				return buffer
+			}
 			buffer = append(buffer, m)
 		default:
 			return buffer
