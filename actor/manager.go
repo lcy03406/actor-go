@@ -40,6 +40,19 @@ func (m *Manager) Clear() {
 	m.groups = make(map[ActorType]groupErased)
 }
 
+// WithValue 在 Manager 根 context 上挂载一个键值对（context.WithValue 语义），
+// 之后所有由本 Manager 创建的 Group / Actor 的 Context() 都能取到该值。
+//
+// 用于把 per-Manager 的基础设施句柄（如 ID 分配器）送达各 Actor 处理函数，
+// 替代进程级单例——同进程多 Manager 并存（如嵌入式 e2e 测试）时，
+// 各 Manager 持有各自实例互不可见。
+//
+// 必须在任何 Serve 之前调用：Group 创建时捕获当时的 m.ctx，
+// 之后追加的 value 对已注册的 Group 不可见。
+func (m *Manager) WithValue(key, value any) {
+	m.ctx = context.WithValue(m.ctx, key, value)
+}
+
 func (m *Manager) RootLogger() *slog.Logger {
 	return m.rootLogger
 }
