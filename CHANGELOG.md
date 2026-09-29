@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Manager.WithValue(key, value any)` 泛型化为强类型 context 值：新增 `CtxValue[T]` /
+  `DefineValue[T]`，挂载用包级 `WithValue[T](mgr, v, value)`，读取用 `CtxValue.Get(ctx)`
+  返回 `(T, bool)`，免除私有 key struct 与类型断言样板；且在 Serve 之后调用会 panic
+  （原先对已注册的 Group 静默不可见）。
 - `shared` 包重写为共享数据容器：移除 `Cache` / `Versioned` / `ServeWriter` /
   `RegisterRefresh`（同一 Group 只能持有一份数据，多份会静默覆盖），改为按 key 的
   发布订阅模型：`Define` / `Publish` / `ServeReader` / `Watch` / `Fetch`。

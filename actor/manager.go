@@ -40,17 +40,44 @@ func (m *Manager) Clear() {
 	m.groups = make(map[ActorType]groupErased)
 }
 
-// WithValue 在 Manager 根 context 上挂载一个键值对（context.WithValue 语义），
-// 之后所有由本 Manager 创建的 Group / Actor 的 Context() 都能取到该值。
+// CtxValue 是挂载在 Manager 根 context 上的强类型值的句柄，由 DefineValue 在
+// 包初始化期创建。key 由句柄自带、值类型参与其身份：写入（WithValue）与读取
+// （Get）在编译期检查类型，无需手写私有 key struct 与类型断言。
+type CtxValue[T any] struct {
+	key *ctxKey[T]
+}
+
+// ctxKey 是 CtxValue 的私有键类型：key 取指针地址，多次 DefineValue 互不冲突。
+type ctxKey[T any] struct{}
+
+// DefineValue 定义一个 per-Manager 的强类型 context 值：
+//
+//	var seqAlloc = actor.DefineValue[*seq.Alloc]()
+func DefineValue[T any]() CtxValue[T] {
+	return CtxValue[T]{key: new(ctxKey[T])}
+}
+
+// WithValue 把 value 挂载到 Manager 根 context，之后本 Manager 创建的所有
+// Group / Actor 的 Context() 都能经 CtxValue.Get 取到该值。
 //
 // 用于把 per-Manager 的基础设施句柄（如 ID 分配器）送达各 Actor 处理函数，
 // 替代进程级单例——同进程多 Manager 并存（如嵌入式 e2e 测试）时，
 // 各 Manager 持有各自实例互不可见。
 //
-// 必须在任何 Serve 之前调用：Group 创建时捕获当时的 m.ctx，
-// 之后追加的 value 对已注册的 Group 不可见。
-func (m *Manager) WithValue(key, value any) {
-	m.ctx = context.WithValue(m.ctx, key, value)
+// 必须在任何 Serve 之前调用：Group 创建时捕获当时的 m.ctx，之后挂载的 value
+// 对已注册的 Group 不可见——违反即 panic，免得静默失效难以排查。
+func WithValue[T any](m *Manager, v CtxValue[T], value T) {
+	if len(m.groups) > 0 {
+		panic(fmt.Sprintf("actor: WithValue after Serve; %d group(s) already registered, value would be invisible to them", len(m.groups)))
+	}
+	m.ctx = context.WithValue(m.ctx, v.key, value)
+}
+
+// Get 返回 ctx 中的值及是否存在；ctx 未挂载该值（ctx 不属于对应 Manager 之下）
+// 时返回零值与 false。
+func (v CtxValue[T]) Get(ctx context.Context) (T, bool) {
+	value, ok := ctx.Value(v.key).(T)
+	return value, ok
 }
 
 func (m *Manager) RootLogger() *slog.Logger {
