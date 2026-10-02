@@ -23,6 +23,9 @@ type ActorControl struct {
 	timerId     TimerId
 	postpone    []postponeItem
 	postponeSet map[any]struct{}
+	// postponeTimer 延后队列的兜底 flush 定时器（见 armPostponeFlush）：
+	// 队列非空时武装，保证不发消息的 actor 也能周期性重试。
+	postponeTimer TimerId
 }
 
 type timerItem struct {
@@ -36,7 +39,17 @@ type postponeItem struct {
 	fn func() error
 }
 
+// postponeFlushInterval 延后队列的兜底 flush 周期。
+//
+// 队列的常规重试入口是发送方下一次 APost/ACall/AMulticast（poseponePost），
+// 但长期不发消息的 actor 会把队列压到本次生命周期结束；本定时器是这条路径的兜底。
+const postponeFlushInterval = 100 * time.Millisecond
+
 func (a *ActorControl) clear() {
+	// 退出前最后一次 flush：延后队列挂在**本次生命周期**的 ActorControl 上（下次
+	// spawn 是新生命周期，按语义不自动重发），ctx 一丢队列就消失。因此这里是队列的
+	// 唯一终局出口，发不出去的部分必须逐条告警——否则消息静默消失、调用方无从感知。
+	a.flushPostpone()
 	for len(a.timers) > 0 {
 		for id, timer := range a.timers {
 			timer.timer.Stop()
@@ -205,6 +218,52 @@ func (a *ActorControl) poseponePost() {
 	// 3. 原子替换
 	a.postpone = newPostpone
 	a.postponeSet = newSet
+	if len(newPostpone) == 0 {
+		a.stopPostponeFlush()
+	}
+}
+
+// flushPostpone 生命周期结束时的最后一次延后重试：尽最大努力把队列发完，仍
+// 剩余的部分随本次生命周期一起消失，逐条 Error 告警。
+//
+// 调用点只有 clear()（Quit 与回到空闲池两条退出路径共用）——这是队列的终局，
+// 不再续拍定时器。
+func (a *ActorControl) flushPostpone() {
+	a.stopPostponeFlush()
+	if len(a.postpone) == 0 {
+		return
+	}
+	a.poseponePost()
+	for _, item := range a.postpone {
+		a.ilogger.Error("postpone dropped: message never delivered", "target", item.id)
+	}
+	a.postpone = nil
+	a.postponeSet = nil
+}
+
+// armPostponeFlush 武装延后队列的兜底 flush 定时器（幂等；队列排空后自动停止续拍）。
+//
+// 常规重试入口 poseponePost 只在发送方下一次发消息时被驱动，纯"最后一发"的 actor
+// （如 Post 完立即 Quit 的死亡掉落路径）压根不会再发消息，队列将一直挂着直到生命
+// 周期结束；本定时器把重试从"被动"变成"周期性主动"。
+func (a *ActorControl) armPostponeFlush() {
+	if a.postponeTimer != 0 || len(a.postpone) == 0 {
+		return
+	}
+	a.postponeTimer = a.Timer("PostponeFlush", postponeFlushInterval, func() {
+		a.postponeTimer = 0
+		a.poseponePost()
+		a.armPostponeFlush()
+	})
+}
+
+// stopPostponeFlush 取消兜底 flush 定时器（队列已排空或生命周期结束）。
+func (a *ActorControl) stopPostponeFlush() {
+	if a.postponeTimer == 0 {
+		return
+	}
+	a.StopTimer(a.postponeTimer)
+	a.postponeTimer = 0
 }
 
 func appendPostpone[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, R0 any](a *ActorControl, id A, req Q) {
@@ -220,6 +279,7 @@ func appendPostpone[A ActorId, Q Request[A, R, Q0, R0], R PtrReply[R0], Q0 any, 
 		a.postponeSet = make(map[any]struct{})
 	}
 	a.postponeSet[id] = struct{}{}
+	a.armPostponeFlush()
 }
 
 func (a *ActorControl) hasPostpone(id any) bool {

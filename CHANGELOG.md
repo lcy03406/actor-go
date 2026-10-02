@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- 延后队列（postpone）不再只由发送方下一次发消息被动驱动：队列非空时武装 100ms
+  的兜底 flush 定时器（`armPostponeFlush`），生命周期结束时（`clear()`，Quit 与回到
+  空闲池共用）再 flush 一次并逐条 `Error` 告警仍未投出的消息。队列仍挂在
+  `ActorControl` 上（下次 spawn 是新生命周期，**不**自动重发），但"消息静默消失"
+  不再是静默的。
 - `Manager.WithValue(key, value any)` 泛型化为强类型 context 值：新增 `CtxValue[T]` /
   `DefineValue[T]`，挂载用包级 `WithValue[T](mgr, v, value)`，读取用 `CtxValue.Get(ctx)`
   返回 `(T, bool)`，免除私有 key struct 与类型断言样板；且在 Serve 之后调用会 panic
