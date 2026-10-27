@@ -27,7 +27,7 @@ func (*refreshReq[R]) ReqType(_ R, _ *refreshRep) string { return "__shared_refr
 type binding struct {
 	add     func(subs any, id actor.ActorIdBase) any
 	remove  func(subs any, id actor.ActorIdBase)
-	deliver func(mgr *actor.Manager, subs any, name string, version int64, value any, ttl time.Duration) []actor.ActorIdBase
+	deliver func(a *actor.ActorControl, subs any, name string, version int64, value any, ttl time.Duration) []actor.ActorIdBase
 }
 
 var (
@@ -62,7 +62,7 @@ func newBinding[R actor.ActorId]() *binding {
 				delete(m, r)
 			}
 		},
-		deliver: func(mgr *actor.Manager, subs any, name string, version int64, value any, ttl time.Duration) []actor.ActorIdBase {
+		deliver: func(a *actor.ActorControl, subs any, name string, version int64, value any, ttl time.Duration) []actor.ActorIdBase {
 			m, _ := subs.(map[R]struct{})
 			if len(m) == 0 {
 				return nil
@@ -72,7 +72,10 @@ func newBinding[R actor.ActorId]() *binding {
 				ids = append(ids, id)
 			}
 			req := &refreshReq[R]{Name: name, Version: version, Value: value, TTL: ttl}
-			errs, _ := actor.Multicast[R](mgr, ids, req)
+			// AMulticast：读者忙 ⇒ 消息进该读者的延后队列（挂本次生命周期）并自动重试，
+			// 由 postponeFlushInterval 周期 flush 与 Quit 前最后一次 flush 兜底——因此
+			// 推送不依赖 TTL 对账，也不因一次信箱满而永久丢失。
+			errs, _ := actor.AMulticast[R](a, ids, req)
 			var gone []actor.ActorIdBase
 			for _, e := range errs {
 				if e.Err == nil {
@@ -136,8 +139,14 @@ func (r *Reader) entry(name string) *cacheEntry {
 }
 
 // set 用容器推送的快照替换本地缓存。
+//
+// 版本单调：低于 / 等于本地版本的推送（延后队列重放旧值、并发重复推送）幂等丢弃，
+// 避免读者快照倒退——读者可能以此值做单调判定（如时钟锚点）。
 func (r *Reader) set(name string, version int64, value any, ttl time.Duration) {
 	e := r.entry(name)
+	if e.loaded && version <= e.version {
+		return
+	}
 	e.value = value
 	e.version = version
 	e.loaded = true

@@ -241,18 +241,21 @@ func scheduleRefresh(ctx *actor.ActorContext[storeId, storeState], e *entry, def
 		cd = e.info.cooldown
 	}
 	if cd <= 0 || time.Since(e.lastSent) >= cd {
-		sendRefresh(ctx.Manager(), e)
+		sendRefresh(ctx.Control(), e)
 		return
 	}
 	e.pending = true
 	ctx.Timer("shared_refresh:"+e.name, time.Until(e.lastSent.Add(cd)), func() {
 		e.pending = false
-		sendRefresh(ctx.Manager(), e)
+		sendRefresh(ctx.Control(), e)
 	})
 }
 
 // sendRefresh 向全部已注册读者推送最新值，并清理已消失的读者。
-func sendRefresh(mgr *actor.Manager, e *entry) {
+//
+// 投递走 AMulticast（见 binding.deliver）：读者忙则进延后队列自动重试，不依赖 TTL 对账。
+// 因此这里只处理"读者已消失"（ActorNotFound）——那是真的没有接收方，必须摘除。
+func sendRefresh(a *actor.ActorControl, e *entry) {
 	if len(e.subs) == 0 {
 		return
 	}
@@ -262,7 +265,7 @@ func sendRefresh(mgr *actor.Manager, e *entry) {
 		ttl = e.info.ttl
 	}
 	for bind, subs := range e.subs {
-		for _, id := range bind.deliver(mgr, subs, e.name, e.version, e.value, ttl) {
+		for _, id := range bind.deliver(a, subs, e.name, e.version, e.value, ttl) {
 			bind.remove(subs, id)
 		}
 	}
