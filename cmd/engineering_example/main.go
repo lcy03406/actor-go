@@ -1,59 +1,46 @@
-// 工程化示例：多 Actor 子包 + 子模块 + grain 持久化 + logic 公共库。
+// engineering_example 演示 actor-go 的工程化用法：
+// 推荐的包结构、一条真实的请求链路、持久化与共享数据的边界。
 //
-// 启动: go run . -type all-in-one -addr localhost:8001
-//
-// 项目结构详见 README.md。
+//	go run ./cmd/engineering_example             # 跑默认剧本，数据落在 ./data
+//	go run ./cmd/engineering_example -v          # 同时打印框架日志（每条消息的收发）
+//	go run ./cmd/engineering_example -data TMP   # 换一个落盘目录
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
-	"github.com/lcy03406/actor-go/cmd/engineering_example/console"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/demo"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/setup"
 )
 
 func main() {
-	nodeType := flag.String("type", "all-in-one", "节点类型")
-	addr := flag.String("addr", "localhost:8001", "监听地址")
-	seeds := flag.String("seeds", "", "种子节点地址，逗号分隔")
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "出错:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	dataDir := flag.String("data", "./data", "grain 落盘目录")
+	verbose := flag.Bool("v", false, "打印框架日志（含每条消息的收发）")
 	flag.Parse()
 
-	if _, ok := setup.GroupMapping[*nodeType]; !ok {
-		log.Fatalf("未知节点类型: %s", *nodeType)
+	level := slog.LevelWarn
+	if *verbose {
+		// actor 在 Info 级别逐条打印收发，教学时很有用，跑默认剧本时太吵。
+		level = slog.LevelInfo
 	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	nodeID := fmt.Sprintf("%s-%s", *nodeType, *addr)
-	log.SetFlags(log.Ltime | log.Lmicroseconds)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	router, mem, err := setup.StartNode(ctx, setup.NodeConfig{
-		NodeType: *nodeType,
-		NodeID:   nodeID,
-		Addr:     *addr,
-		Seeds:    *seeds,
-	})
+	srv, err := setup.New(setup.Config{DataDir: *dataDir, Logger: logger})
 	if err != nil {
-		log.Fatalf("启动失败: %v", err)
+		return err
 	}
+	defer srv.Close() // 优雅停机：退出钩子在这里把 grain 落盘
 
-	time.Sleep(500 * time.Millisecond)
-	console.PrintBanner(*nodeType, *addr, router)
-	go console.Run(ctx, router, mem)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	log.Println("正在关闭...")
-	router.Close()
-	log.Println("已退出")
+	return demo.Run(context.Background(), srv.Mgr, os.Stdout)
 }

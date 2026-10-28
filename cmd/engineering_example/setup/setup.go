@@ -1,153 +1,90 @@
-// setup 包负责组装所有 Actor Group、RPC 服务器和集群配置。
+// Package setup 是装配层：把 Manager、共享容器、各 actor 的注册和世界初始化拼在一起。
 //
-// 【合并注册】
-//
-//	player.Register(mgr, rpcBld, pm, placement, selfID) 一次调用完成 handler + RPC + CheckOwnership。
-//	setup 不再需要分别调用多次。
-//
-// 【依赖方向】
-//
-//	player/ ──→ types/ + attr/ + inventory/ + skill/ + actor + rpc + cluster
-//	room/   ──→ actor 包（含房间内聊天 / 战斗逻辑）
-//	  ↑
-//	  │  setup 只依赖一层子包
-//	  │
-//	main.go ──→ setup + player + room
+// 只有这里同时 import 全部 actor 实现包；其余任何地方都只依赖 ids + 契约包。
+// 于是"新增一个 actor"的改动面就固定为两处：ids 加一个 ID 类型、本文件加一行注册。
 package setup
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"log/slog"
-	"strings"
+	"time"
 
 	"github.com/lcy03406/actor-go/actor"
-	"github.com/lcy03406/actor-go/cluster"
 	"github.com/lcy03406/actor-go/grain"
-	"github.com/lcy03406/actor-go/rpc"
+	"github.com/lcy03406/actor-go/shared"
 
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player"
-	playertypes "github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/types"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/room"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/actors/client"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/actors/player"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/actors/room"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/actors/world"
+	worldapi "github.com/lcy03406/actor-go/cmd/engineering_example/actors/world/api"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/ids"
 )
 
-// ─── 类型别名 ───
-
-type (
-	JsonMsg = json.RawMessage
-	JsonC   = rpc.JsonCodec
-	JsonT   = rpc.JsonTransport
-	JsonSrv = rpc.Server[JsonMsg, JsonC, JsonT]
-	Router  = cluster.Router[JsonMsg, JsonC, JsonT]
-	RegBld  = rpc.RegistryBuilder[JsonMsg, JsonC]
-)
-
-// ─── GroupMapping ───
-
-var GroupMapping = cluster.GroupMapping{
-	"player-server": {"Player"},
-	"room-server":   {"Room"},
-	"all-in-one":    {"Player", "Room"},
+// Config 装配参数。
+type Config struct {
+	DataDir string        // grain 落盘目录，空则 ./data
+	NodeID  string        // 租约持有者标识，空则 example-node
+	Persist time.Duration // 定时存盘间隔，0 表示只在退出时存盘
+	Logger  *slog.Logger  // nil 则丢弃全部日志
 }
 
-// ─── NodeConfig ───
-
-type NodeConfig struct {
-	NodeType string
-	NodeID   string
-	Addr     string
-	Seeds    string
-	DataDir  string // Grain 持久化目录；为空时默认 "./data"
+// Server 是一次装配的产物。调用方只需要 Manager 和 Close。
+type Server struct {
+	Mgr *actor.Manager
 }
 
-// ─── StartNode ───
-
-func StartNode(ctx context.Context, cfg NodeConfig) (*Router, *DynamicMembership, error) {
-	mgr := actor.NewManager(slog.Default())
-
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = "./data"
+// New 装配全部 actor，并把世界初始化好。
+//
+// 世界初始化必须同步完成：配置先进容器，玩家登录时才读得到 ——
+// "先发布、后使用"的启动顺序是 shared 唯一需要关心的时序。
+func New(cfg Config) (*Server, error) {
+	if cfg.DataDir == "" {
+		cfg.DataDir = "./data"
 	}
+	if cfg.NodeID == "" {
+		cfg.NodeID = "example-node"
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	mgr := actor.NewManager(logger)
+	srv := &Server{Mgr: mgr}
+
 	pm := grain.NewPersistenceManager(
-		grain.WithDriver(grain.NewJsonDriver(dataDir)),
+		grain.WithDriver(grain.NewJsonDriver(cfg.DataDir)),
 		grain.WithNodeId(cfg.NodeID),
+		grain.WithAutoPersistInterval(cfg.Persist),
 	)
 
-	hasPlayer := cfg.NodeType == "player-server" || cfg.NodeType == "all-in-one"
-	hasRoom := cfg.NodeType == "room-server" || cfg.NodeType == "all-in-one"
+	// 1. 容器先于读者注册：读者首次 Watch 就要能路由到容器分片。
+	shared.Serve(mgr, shared.Options{Shards: 1})
 
-	// 构建集群拓扑
-	self := cluster.Node{ID: cfg.NodeID, Addr: cfg.Addr, Type: cfg.NodeType}
-	members := []cluster.Node{self}
-	if cfg.Seeds != "" {
-		for _, seed := range strings.Split(cfg.Seeds, ",") {
-			seed = strings.TrimSpace(seed)
-			if seed == "" || seed == cfg.Addr {
-				continue
-			}
-			seedType := inferTypeFromAddr(seed)
-			members = append(members, cluster.Node{
-				ID:   fmt.Sprintf("%s-%s", seedType, seed),
-				Addr: seed,
-				Type: seedType,
-			})
-		}
+	// 2. 各 actor 注册。彼此没有顺序要求 —— 每个包只暴露一个 RegisterHandlers。
+	world.RegisterHandlers(mgr)
+	room.RegisterHandlers(mgr)
+	player.RegisterHandlers(mgr, pm)
+	client.RegisterHandlers(mgr)
+
+	// 3. 初始化世界：写配置 → 发布进容器。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := actor.Call(ctx, mgr, ids.TheWorld(), &worldapi.Init{}); err != nil {
+		srv.Close()
+		return nil, fmt.Errorf("setup: 初始化世界失败: %w", err)
 	}
-
-	mem := newDynamicMembership(self, members...)
-	placement := cluster.NewConsistentHashPlacement(128).WithGroupMapping(GroupMapping)
-	router := cluster.NewRouter[JsonMsg, JsonC, JsonT](mem, placement, mgr)
-
-	// RPC Server + Actor Group 一次性注册（含集群 CheckOwnership）
-	server := rpc.NewServer[JsonMsg, JsonC, JsonT](cfg.Addr, mgr, func(b *RegBld) {
-		if hasPlayer {
-			player.Register(mgr, b, pm, placement, self.ID)
-		}
-		if hasRoom {
-			room.Register(mgr, b, placement, self.ID)
-		}
-	})
-	if err := server.Start(); err != nil {
-		return nil, nil, fmt.Errorf("启动 RPC Server 失败: %w", err)
-	}
-	actualAddr := server.Addr()
-	self.Addr = actualAddr
-	mem.updateSelf(cfg.NodeID, self)
-
-	log.Printf("节点已启动: %s (%s) 监听 %s, 成员 %d",
-		self.ID, cfg.NodeType, actualAddr, len(members))
-	go func() {
-		<-ctx.Done()
-		server.Shutdown(context.Background())
-	}()
-
-	// 迁移协调器
-	coord := cluster.NewMigrationCoordinator(mgr, placement, mem)
-	if hasPlayer {
-		coord.RegisterNotify(func() {
-			actor.Broadcast[playertypes.PlayerId](mgr, &player.CheckOwnership{})
-		})
-	}
-	if hasRoom {
-		coord.RegisterNotify(func() {
-			actor.Broadcast[room.RoomId](mgr, &room.CheckOwnership{})
-		})
-	}
-	go coord.Run(ctx, mem.Events())
-
-	return router, mem, nil
+	return srv, nil
 }
 
-func inferTypeFromAddr(addr string) string {
-	switch {
-	case strings.Contains(addr, "8002"):
-		return "room-server"
-	case strings.Contains(addr, "8004"):
-		return "all-in-one"
-	default:
-		return "player-server"
-	}
+// Close 优雅停机。
+//
+// CloseManager 触发每个 actor 的退出钩子（grain 在这里落盘并释放租约），
+// JoinManager 等它们真的退出。少了这两步，进程直接退出会丢掉最后一次写入。
+func (s *Server) Close() {
+	s.Mgr.CloseManager()
+	s.Mgr.JoinManager()
 }

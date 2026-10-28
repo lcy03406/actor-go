@@ -37,7 +37,7 @@ actor-go/
 │   ├── grain_example/        # 持久化 Grain 示例
 │   ├── shared_example/       # 共享数据容器示例
 │   ├── cluster_example/      # 集群迁移示例
-│   ├── engineering_example/  # 吞吐量 / 压测示例
+│   ├── engineering_example/  # 推荐的包结构与端到端示例
 │   └── readmegen/            # 把 example_test.go 的 region 注入 README
 ├── actor/                    # Actor 核心
 │   ├── types.go              # ActorId、Request 接口

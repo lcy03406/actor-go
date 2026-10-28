@@ -1,566 +1,287 @@
-// 集成测试：模拟多玩家完整流程，覆盖所有 actor + 子模块 + 持久化。
-//
-// 通过 cluster.Call/Post 调用，验证 handler + RPC + cluster 完整组装链路。
 package main
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
+	"errors"
 	"testing"
 	"time"
 
-	"github.com/lcy03406/actor-go/cluster"
+	"github.com/lcy03406/actor-go/actor"
 
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/attr"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/inventory"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/skill"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/player/types"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/actor/room"
-	"github.com/lcy03406/actor-go/cmd/engineering_example/logic"
+	clientapi "github.com/lcy03406/actor-go/cmd/engineering_example/actors/client/api"
+	playerapi "github.com/lcy03406/actor-go/cmd/engineering_example/actors/player/api"
+	roomapi "github.com/lcy03406/actor-go/cmd/engineering_example/actors/room/api"
+	worldapi "github.com/lcy03406/actor-go/cmd/engineering_example/actors/world/api"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/ids"
+	"github.com/lcy03406/actor-go/cmd/engineering_example/protocol"
 	"github.com/lcy03406/actor-go/cmd/engineering_example/setup"
 )
 
-// ─── 辅助 ───
+// 端到端用例：只经 client 契约发请求、只读下行与快照做断言，
+// 与真实客户端看到的接口完全一致。
 
-type testNode struct {
-	router *setup.Router
-	cancel context.CancelFunc
-}
-
-func startTestNode(t *testing.T) *testNode {
+func newServer(t *testing.T) *setup.Server {
 	t.Helper()
-
-	dataDir := filepath.Join(t.TempDir(), "data")
-	os.MkdirAll(dataDir, 0755)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	router, _, err := setup.StartNode(ctx, setup.NodeConfig{
-		NodeType: "all-in-one",
-		NodeID:   "test-node",
-		Addr:     "localhost:0",
-		DataDir:  dataDir,
-	})
+	srv, err := setup.New(setup.Config{DataDir: t.TempDir()})
 	if err != nil {
-		cancel()
-		t.Fatalf("启动节点失败: %v", err)
+		t.Fatalf("装配失败: %v", err)
 	}
-	time.Sleep(200 * time.Millisecond)
-
-	return &testNode{router: router, cancel: cancel}
+	t.Cleanup(srv.Close)
+	return srv
 }
 
-func (n *testNode) Close() { n.router.Close(); n.cancel() }
-
-func pid(name string) types.PlayerId {
-	return types.PlayerId{ServerId: 1, OpenId: name}
+type conn struct {
+	id     ids.ClientId
+	player ids.PlayerId
 }
 
-// ─── 单玩家完整生命周期 ───
+func login(t *testing.T, ctx context.Context, mgr *actor.Manager, openID string) conn {
+	t.Helper()
+	c := conn{
+		id:     ids.ClientId{Conn: "conn-" + openID},
+		player: ids.PlayerId{OpenID: openID},
+	}
+	if _, err := actor.Call(ctx, mgr, c.id, &clientapi.Login{OpenID: openID}); err != nil {
+		t.Fatalf("登录 %s 失败: %v", openID, err)
+	}
+	return c
+}
 
-func TestPlayerFullLifecycle(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
+// waitMsgs 等到至少 n 条下行再一起取走。
+//
+// 下行是异步的（Post 不等送达，房间广播还要绕玩家一圈），所以按条数轮询，
+// 而不是 sleep 一个凑出来的时长 —— 后者在慢机器上必然偶发失败。
+func waitMsgs(t *testing.T, ctx context.Context, mgr *actor.Manager, c conn, n int) []protocol.Msg {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var got []protocol.Msg
+	for {
+		rep, err := actor.Call(ctx, mgr, c.id, &clientapi.Drain{})
+		if err != nil {
+			t.Fatalf("取 %s 下行失败: %v", c.player.OpenID, err)
+		}
+		got = append(got, rep.Msgs...)
+		if len(got) >= n {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s 等待 %d 条下行超时（收到 %d 条）", c.player.OpenID, n, len(got))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func status(t *testing.T, ctx context.Context, mgr *actor.Manager, c conn) *playerapi.PlayerView {
+	t.Helper()
+	view, err := actor.Call(ctx, mgr, c.id, &clientapi.Status{})
+	if err != nil {
+		t.Fatalf("查询 %s 快照失败: %v", c.player.OpenID, err)
+	}
+	return view
+}
+
+func loginOK(t *testing.T, msgs []protocol.Msg) protocol.LoginOK {
+	t.Helper()
+	for _, m := range msgs {
+		if ok, is := m.(protocol.LoginOK); is {
+			return ok
+		}
+	}
+	t.Fatalf("下行里没有首帧 LoginOK: %+v", msgs)
+	return protocol.LoginOK{}
+}
+
+func hasStateUpdate(msgs []protocol.Msg, reason string) bool {
+	for _, m := range msgs {
+		if u, ok := m.(protocol.StateUpdate); ok && u.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func roomEvents(msgs []protocol.Msg, kind string) []string {
+	var out []string
+	for _, m := range msgs {
+		if e, ok := m.(protocol.RoomEvent); ok && e.Kind == kind {
+			out = append(out, e.Text)
+		}
+	}
+	return out
+}
+
+// TestCombatFlow 走一遍完整链路：登录 → 进房 → 聊天 → 三击必杀 → 房间缓存 → 热更配置。
+func TestCombatFlow(t *testing.T) {
+	srv := newServer(t)
+	mgr := srv.Mgr
 	ctx := context.Background()
 
-	p1 := pid("alice")
+	alice := login(t, ctx, mgr, "alice")
+	bob := login(t, ctx, mgr, "bob")
 
-	// 创建玩家
-	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 200, InitLevel: 3}); err != nil {
-		t.Fatalf("创建玩家失败: %v", err)
+	// 首帧必须是权威全量：派生字段（MaxHP / Atk / 倍率）也在里面。
+	first := loginOK(t, waitMsgs(t, ctx, mgr, alice, 1))
+	if first.Level != 1 || first.HP != 100 || first.MaxHP != 100 || first.Atk != 40 || first.ExpRate != 100 {
+		t.Fatalf("首帧不符: %+v", first)
 	}
-	time.Sleep(50 * time.Millisecond)
+	waitMsgs(t, ctx, mgr, bob, 1)
 
-	// 查询状态
-	status, err := cluster.Call(ctx, n.router, p1, &player.PlayerStatusReq{})
-	if err != nil {
-		t.Fatalf("查询状态失败: %v", err)
+	// 进同一个房间：alice 收到自己进场 + bob 进场，bob 只有自己那条。
+	for _, c := range []conn{alice, bob} {
+		if _, err := actor.Call(ctx, mgr, c.id, &clientapi.Join{Room: ids.RoomId{Seq: 3}}); err != nil {
+			t.Fatalf("%s 进房失败: %v", c.player.OpenID, err)
+		}
 	}
-	if status.HP != 200 {
-		t.Errorf("HP 期望=200, 实际=%d", status.HP)
+	if got := roomEvents(waitMsgs(t, ctx, mgr, alice, 3), "join"); len(got) != 2 {
+		t.Fatalf("alice 应收到 2 条进场广播，得到 %v", got)
 	}
-	if status.Level != 3 {
-		t.Errorf("Level 期望=3, 实际=%d", status.Level)
-	}
-
-	// 治疗受 MaxHP 上限约束：初始即满血(200)，治疗应保持 200 且不溢出。
-	// （HP 上限机制把 Heal 与 MaxHP 模块结合，避免无限回血。）
-	heal, err := cluster.Call(ctx, n.router, p1, &player.ControlHeal{Amount: 20})
-	if err != nil {
-		t.Fatalf("治疗失败: %v", err)
-	}
-	if heal.NewHP != 200 {
-		t.Errorf("满血治疗后 HP 期望=200, 实际=%d", heal.NewHP)
-	}
-	if heal.Healed != 0 {
-		t.Errorf("满血治疗时 Healed 期望=0, 实际=%d", heal.Healed)
+	if got := roomEvents(waitMsgs(t, ctx, mgr, bob, 2), "join"); len(got) != 1 {
+		t.Fatalf("bob 应收到 1 条进场广播，得到 %v", got)
 	}
 
-	// 升级提升 MaxHP 上限：加足量经验触发升级（attr.AddExp 在升级时拉高 MaxHP 并回满血）。
-	// 之后在房间内受击掉血即可用 Heal 消耗金币续航（金币来自战斗/AddGold）。
-	if _, err := cluster.Call(ctx, n.router, p1, &attr.AddExp{Amount: 300}); err != nil {
-		t.Fatalf("加经验失败: %v", err)
+	// 聊天：房间广播回全体成员。
+	if _, err := actor.Call(ctx, mgr, alice.id, &clientapi.Say{Text: "大家好啊"}); err != nil {
+		t.Fatalf("发言失败: %v", err)
 	}
-	time.Sleep(30 * time.Millisecond)
-	status2, err := cluster.Call(ctx, n.router, p1, &player.PlayerStatusReq{})
-	if err != nil {
-		t.Fatalf("查询状态失败: %v", err)
+	if got := roomEvents(waitMsgs(t, ctx, mgr, alice, 1), "chat"); len(got) != 1 || got[0] != "alice: 大家好啊" {
+		t.Fatalf("alice 没收到自己的发言广播: %v", got)
 	}
-	if status2.MaxHP <= 200 {
-		t.Errorf("升级后 MaxHP 应提升 (>200), 实际=%d", status2.MaxHP)
+	if got := roomEvents(waitMsgs(t, ctx, mgr, bob, 1), "chat"); len(got) != 1 {
+		t.Fatalf("bob 没收到发言广播: %v", got)
 	}
 
-	// 加金币
-	gold, err := cluster.Call(ctx, n.router, p1, &player.AddGold{Amount: 200})
-	if err != nil {
-		t.Fatalf("加金币失败: %v", err)
-	}
-	if gold.NewGold != 300 {
-		t.Errorf("金币 期望=300, 实际=%d", gold.NewGold)
-	}
-}
-
-// ─── 子模块：属性 ───
-
-func TestAttrModule(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	p1 := pid("attr_tester")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1})
-	time.Sleep(30 * time.Millisecond)
-
-	exp1, err := cluster.Call(ctx, n.router, p1, &attr.AddExp{Amount: 50})
-	if err != nil {
-		t.Fatalf("加经验失败: %v", err)
-	}
-	if exp1.LevelUp {
-		t.Error("50 经验不应升级")
-	}
-
-	exp2, err := cluster.Call(ctx, n.router, p1, &attr.AddExp{Amount: 60})
-	if err != nil {
-		t.Fatalf("加经验失败: %v", err)
-	}
-	if !exp2.LevelUp {
-		t.Error("110 经验应该升级")
-	}
-	if exp2.Level != 2 {
-		t.Errorf("Level 期望=2, 实际=%d", exp2.Level)
-	}
-
-	attrs, err := cluster.Call(ctx, n.router, p1, &attr.QueryAttr{})
-	if err != nil {
-		t.Fatalf("查询属性失败: %v", err)
-	}
-	if attrs.Level != 2 {
-		t.Errorf("Level 期望=2, 实际=%d", attrs.Level)
-	}
-
-	up, err := cluster.Call(ctx, n.router, p1, &attr.UpgradeAttr{Stat: "atk"})
-	if err != nil {
-		t.Fatalf("升级属性失败: %v", err)
-	}
-	if up == nil {
-		t.Error("属性升级不应返回 nil")
-	}
-}
-
-// ─── 子模块：道具 ───
-
-func TestInventoryModule(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	p1 := pid("inv_tester")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1})
-	time.Sleep(30 * time.Millisecond)
-
-	add, err := cluster.Call(ctx, n.router, p1, &inventory.AddItem{
-		ID: 1, Name: "血瓶", Count: 3, Type: "potion",
-	})
-	if err != nil {
-		t.Fatalf("添加道具失败: %v", err)
-	}
-	if !add.Added {
-		t.Error("应该成功添加道具")
-	}
-
-	bag, err := cluster.Call(ctx, n.router, p1, &inventory.ListItems{})
-	if err != nil {
-		t.Fatalf("查看背包失败: %v", err)
-	}
-	if len(bag.Items) != 1 {
-		t.Errorf("道具数 期望=1, 实际=%d", len(bag.Items))
-	}
-
-	use, err := cluster.Call(ctx, n.router, p1, &inventory.UseItem{ID: 1})
-	if err != nil {
-		t.Fatalf("使用道具失败: %v", err)
-	}
-	if !use.Used {
-		t.Error("应该成功使用道具")
-	}
-
-	bag2, err := cluster.Call(ctx, n.router, p1, &inventory.ListItems{})
-	if err != nil {
-		t.Fatalf("查看背包失败: %v", err)
-	}
-	if bag2.Used != 2 {
-		t.Errorf("使用后已用格数 期望=2, 实际=%d", bag2.Used)
-	}
-
-	rm, err := cluster.Call(ctx, n.router, p1, &inventory.RemoveItem{ID: 1, Count: 2})
-	if err != nil {
-		t.Fatalf("移除道具失败: %v", err)
-	}
-	if !rm.Removed {
-		t.Error("应该成功移除道具")
-	}
-}
-
-// ─── 子模块：技能 ───
-
-func TestSkillModule(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	p1 := pid("skill_tester")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1})
-	time.Sleep(30 * time.Millisecond)
-	cluster.Call(ctx, n.router, p1, &player.AddGold{Amount: 500})
-
-	learn, err := cluster.Call(ctx, n.router, p1, &skill.ControlLearn{
-		ID: 101, Name: "火球术", Cost: 50,
-	})
-	if err != nil {
-		t.Fatalf("学习技能失败: %v", err)
-	}
-	if !learn.Learned {
-		t.Fatalf("学习失败: %s", learn.Reason)
-	}
-
-	list, err := cluster.Call(ctx, n.router, p1, &skill.ListSkills{})
-	if err != nil {
-		t.Fatalf("查看技能失败: %v", err)
-	}
-	if len(list.Skills) != 1 {
-		t.Errorf("技能数 期望=1, 实际=%d", len(list.Skills))
-	}
-
-	cast, err := cluster.Call(ctx, n.router, p1, &skill.ControlCast{
-		ID: 101, Target: "goblin", TargetPos: logic.Point{X: 3, Y: 0},
-	})
-	if err != nil {
-		t.Fatalf("释放技能失败: %v", err)
-	}
-	if !cast.Cast {
-		t.Fatalf("释放失败: %s", cast.Reason)
-	}
-	if cast.Damage <= 0 {
-		t.Error("伤害应该大于 0")
-	}
-
-	cast2, err := cluster.Call(ctx, n.router, p1, &skill.ControlCast{
-		ID: 101, Target: "goblin", TargetPos: logic.Point{X: 1, Y: 0},
-	})
-	if err != nil {
-		t.Fatalf("释放技能失败: %v", err)
-	}
-	if cast2.Cast {
-		t.Error("冷却中应该释放失败")
-	}
-
-	cast3, err := cluster.Call(ctx, n.router, p1, &skill.ControlCast{
-		ID: 101, Target: "dragon", TargetPos: logic.Point{X: 10, Y: 0},
-	})
-	if err != nil {
-		t.Fatalf("释放技能失败: %v", err)
-	}
-	if cast3.Cast {
-		t.Error("超出范围应该释放失败")
-	}
-}
-
-// ─── Room / Chat ───
-
-func TestRoomActor(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	r1 := room.RoomId{RoomId: 100}
-	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10}); err != nil {
-		t.Fatalf("创建房间失败: %v", err)
-	}
-	time.Sleep(30 * time.Millisecond)
-
-	join, err := cluster.Call(ctx, n.router, r1, &room.JoinRoom{Player: pid("alice")})
-	if err != nil {
-		t.Fatalf("加入房间失败: %v", err)
-	}
-	if join.CurrentCount != 1 {
-		t.Errorf("人数 期望=1, 实际=%d", join.CurrentCount)
-	}
-
-	info, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
-	if err != nil {
-		t.Fatalf("查询房间失败: %v", err)
-	}
-	if info.MaxPlayers != 10 {
-		t.Errorf("MaxPlayers 期望=10, 实际=%d", info.MaxPlayers)
-	}
-}
-
-func TestChatActor(t *testing.T) {
-	t.Skip("Chat Actor 已移除，聊天功能整合进 Room")
-}
-
-// ─── 多玩家并发 ───
-
-func TestMultiPlayerConcurrent(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	players := []string{"alice", "bob", "charlie", "diana", "eve"}
-	for _, name := range players {
-		cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, pid(name), &player.Login{InitHP: 100, InitLevel: 1})
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	errCh := make(chan error, len(players))
-	for _, name := range players {
-		go func(name string) {
-			p := pid(name)
-			if _, err := cluster.Call(ctx, n.router, p, &attr.AddExp{Amount: 150}); err != nil {
-				errCh <- err
-				return
+	// 三击必杀：Lv1 攻击力 40，对 0 防御造成 40，100 → 60 → 20 → 倒地。
+	for i, wantHP := range []int{60, 20, 0} {
+		if _, err := actor.Call(ctx, mgr, alice.id, &clientapi.Attack{Target: bob.player}); err != nil {
+			t.Fatalf("第 %d 击失败: %v", i+1, err)
+		}
+		// 前两下各一条增量；第三下额外各收一条战报。
+		push := 1
+		if i == 2 {
+			push = 2
+		}
+		bobPushes := waitMsgs(t, ctx, mgr, bob, push)
+		alicePushes := waitMsgs(t, ctx, mgr, alice, push)
+		if !hasStateUpdate(bobPushes, "damage") {
+			t.Fatalf("第 %d 击：bob 没收到受击增量: %+v", i+1, bobPushes)
+		}
+		if !hasStateUpdate(alicePushes, "combat") {
+			t.Fatalf("第 %d 击：alice 没收到战斗结算增量: %+v", i+1, alicePushes)
+		}
+		if got := status(t, ctx, mgr, bob); got.HP != wantHP {
+			t.Fatalf("第 %d 击后 bob HP = %d，期望 %d", i+1, got.HP, wantHP)
+		}
+		if i == 2 {
+			if got := roomEvents(bobPushes, "report"); len(got) != 1 || got[0] != "alice 击倒了 bob" {
+				t.Fatalf("倒地战报不符: %v", got)
 			}
-			errCh <- nil
-		}(name)
-	}
-	for range players {
-		if err := <-errCh; err != nil {
-			t.Errorf("并发操作失败: %v", err)
 		}
 	}
 
-	for _, name := range players {
-		status, err := cluster.Call(ctx, n.router, pid(name), &player.PlayerStatusReq{})
-		if err != nil {
-			t.Errorf("%s 查询失败: %v", name, err)
-			continue
+	// 奖励结算：命中 5 金币 / 10 经验，击杀换成一整份 20 金币 / 40 经验；
+	// 10 + 10 + 40 = 60 经验，1 级需 30，升到 2 级余 30，升级回满 120 血。
+	av := status(t, ctx, mgr, alice)
+	if av.Level != 2 || av.Exp != 30 || av.Gold != 30 || av.HP != 120 || av.MaxHP != 120 {
+		t.Fatalf("击杀奖励结算不符: %+v", av)
+	}
+
+	// 房间缓存：房间看到的是玩家上报的摘要，不是反向查询玩家得到的。
+	roomView, err := actor.Call(ctx, mgr, ids.RoomId{Seq: 3}, &roomapi.Status{})
+	if err != nil {
+		t.Fatalf("查询房间失败: %v", err)
+	}
+	want := []playerapi.Brief{
+		{OpenID: "alice", Level: 2, HP: 120},
+		{OpenID: "bob", Level: 1, HP: 0},
+	}
+	if len(roomView.Members) != len(want) {
+		t.Fatalf("房间成员数不符: %+v", roomView.Members)
+	}
+	for i, m := range want {
+		if roomView.Members[i] != m {
+			t.Fatalf("房间成员[%d] = %+v，期望 %+v", i, roomView.Members[i], m)
 		}
-		if status.Level < 2 {
-			t.Errorf("%s 150 经验应该至少 Lv2, 实际=%d", name, status.Level)
+	}
+
+	// 世界配置热更：world 发布 → 容器推送 → 玩家缓存更新（最终一致，轮询等待）。
+	if _, err := actor.Call(ctx, mgr, ids.TheWorld(), &worldapi.SetConfig{ExpRate: 200}); err != nil {
+		t.Fatalf("热更配置失败: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rate := status(t, ctx, mgr, alice).ExpRate
+		if rate == 200 {
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("alice 读到的经验倍率始终是 %d，期望 200", rate)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-// ─── 跨 Actor 通信：Player → Room / Chat ───
-
-func TestPlayerCrossActorRoom(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
+// TestGrainPersistence 验证持久化边界：角色成长必须活过重启，会话与房间归属不落盘。
+func TestGrainPersistence(t *testing.T) {
+	dir := t.TempDir()
 	ctx := context.Background()
 
-	// 1. 创建 Player
-	p1 := pid("cross_room_player")
-	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1}); err != nil {
-		t.Fatalf("创建玩家失败: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	// 2. 创建 Room
-	r1 := room.RoomId{RoomId: 200}
-	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10}); err != nil {
-		t.Fatalf("创建房间失败: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	// 3. Player 通过 PlayerJoinRoom 请求加入 Room（Player handler 内 actor.Post → Room）
-	joinReply, err := cluster.Call(ctx, n.router, p1, &player.ControlJoinRoom{RoomId: 200})
+	srv1, err := setup.New(setup.Config{DataDir: dir})
 	if err != nil {
-		t.Fatalf("Player 加入房间失败: %v", err)
+		t.Fatalf("首次装配失败: %v", err)
 	}
-	if !joinReply.Success {
-		t.Errorf("Player 加入房间应成功: %s", joinReply.Reason)
+	t.Cleanup(srv1.Close)
+
+	alice := login(t, ctx, srv1.Mgr, "alice")
+	bob := login(t, ctx, srv1.Mgr, "bob")
+	if _, err := actor.Call(ctx, srv1.Mgr, alice.id, &clientapi.Join{Room: ids.RoomId{Seq: 3}}); err != nil {
+		t.Fatalf("alice 进房失败: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := actor.Call(ctx, srv1.Mgr, alice.id, &clientapi.Attack{Target: bob.player}); err != nil {
+			t.Fatalf("第 %d 击失败: %v", i+1, err)
+		}
+	}
+	if got := status(t, ctx, srv1.Mgr, alice); got.Level != 2 || got.Gold != 30 {
+		t.Fatalf("升级前状态不符: %+v", got)
 	}
 
-	// 4. 验证 Room 状态已更新
-	time.Sleep(30 * time.Millisecond)
-	roomInfo, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
+	// 优雅停机：退出钩子在 CloseManager 里把 grain 落盘。
+	srv1.Close()
+
+	srv2, err := setup.New(setup.Config{DataDir: dir})
 	if err != nil {
-		t.Fatalf("查询房间失败: %v", err)
+		t.Fatalf("二次装配失败: %v", err)
 	}
-	if roomInfo.MaxPlayers != 10 {
-		t.Errorf("MaxPlayers 期望=10, 实际=%d", roomInfo.MaxPlayers)
+	t.Cleanup(srv2.Close)
+
+	// 重连 = 新连接 + 重新登录：绑定关系重建，数据从磁盘恢复。
+	again := conn{
+		id:     ids.ClientId{Conn: "conn-alice-reconnect"},
+		player: alice.player,
+	}
+	if _, err := actor.Call(ctx, srv2.Mgr, again.id, &clientapi.Login{OpenID: "alice"}); err != nil {
+		t.Fatalf("重连登录失败: %v", err)
+	}
+	first := loginOK(t, waitMsgs(t, ctx, srv2.Mgr, again, 1))
+	if first.Level != 2 || first.Exp != 30 || first.Gold != 30 || first.HP != 120 {
+		t.Fatalf("重启后成长数据没恢复: %+v", first)
+	}
+	if first.Room != 0 {
+		t.Fatalf("房间归属是运行时字段，不该被持久化: %+v", first)
 	}
 }
 
-func TestPlayerCrossActorRoomChatAndBattle(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
+// TestQueryDoesNotSpawn 验证注册语义：给不存在的玩家发请求必须报错，而不是造出一个空角色。
+func TestQueryDoesNotSpawn(t *testing.T) {
+	srv := newServer(t)
 	ctx := context.Background()
 
-	// 1. 创建两名玩家并加入同一房间
-	attacker := pid("cross_chat_attacker")
-	target := pid("cross_chat_target")
-	for _, p := range []types.PlayerId{attacker, target} {
-		if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p, &player.Login{InitHP: 1000, InitLevel: 5}); err != nil {
-			t.Fatalf("创建玩家失败: %v", err)
-		}
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	r1 := room.RoomId{RoomId: 300}
-	if err := cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10}); err != nil {
-		t.Fatalf("创建房间失败: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	for _, p := range []types.PlayerId{attacker, target} {
-		joinReply, err := cluster.Call(ctx, n.router, p, &player.ControlJoinRoom{RoomId: 300})
-		if err != nil {
-			t.Fatalf("%s 加入房间失败: %v", p, err)
-		}
-		if !joinReply.Success {
-			t.Fatalf("%s 加入房间应成功: %s", p, joinReply.Reason)
-		}
-	}
-
-	// 2. 房间内聊天：Player → Room → 同房间广播
-	chatReply, err := cluster.Call(ctx, n.router, attacker, &player.PlayerRoomChat{Content: "Hello room!"})
-	if err != nil {
-		t.Fatalf("Player 房间聊天失败: %v", err)
-	}
-	if !chatReply.Success {
-		t.Errorf("Player 房间聊天应成功: %s", chatReply.Reason)
-	}
-	time.Sleep(30 * time.Millisecond)
-	roomInfo, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
-	if err != nil {
-		t.Fatalf("查询房间失败: %v", err)
-	}
-	if len(roomInfo.ChatLog) != 1 {
-		t.Errorf("聊天记录数 期望=1, 实际=%d", len(roomInfo.ChatLog))
-	} else if roomInfo.ChatLog[0].Content != "Hello room!" {
-		t.Errorf("聊天内容 期望='Hello room!', 实际='%s'", roomInfo.ChatLog[0].Content)
-	}
-
-	// 3. 房间内战斗：Player → Player(post) → 被攻击方校验同处一室后扣血 → Room 广播记录
-	battleReply, err := cluster.Call(ctx, n.router, attacker, &player.ControlAttack{TargetOpenId: "cross_chat_target"})
-	if err != nil {
-		t.Fatalf("Player 房间战斗失败: %v", err)
-	}
-	if !battleReply.Success {
-		t.Fatalf("Player 房间战斗应成功: %s", battleReply.Reason)
-	}
-	time.Sleep(50 * time.Millisecond)
-	roomInfo2, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
-	if err != nil {
-		t.Fatalf("查询房间失败: %v", err)
-	}
-	if len(roomInfo2.BattleLog) != 1 {
-		t.Errorf("战斗记录数 期望=1, 实际=%d", len(roomInfo2.BattleLog))
-	}
-
-	// 4. 验证被攻击者血量下降
-	targetStatus, err := cluster.Call(ctx, n.router, target, &player.PlayerStatusReq{})
-	if err != nil {
-		t.Fatalf("查询被攻击者状态失败: %v", err)
-	}
-	if targetStatus.HP >= 1000 {
-		t.Errorf("被攻击者 HP 应下降, 实际=%d", targetStatus.HP)
-	}
-
-	// 6. 攻击方应在收到 PlayerCombatResult 回传后获得金币/经验（异步结算）
-	time.Sleep(50 * time.Millisecond)
-	attackerStatus, err := cluster.Call(ctx, n.router, attacker, &player.PlayerStatusReq{})
-	if err != nil {
-		t.Fatalf("查询攻击方状态失败: %v", err)
-	}
-	if attackerStatus.Gold <= 100 {
-		t.Errorf("攻击方战斗后应获得金币 (>100), 实际=%d", attackerStatus.Gold)
-	}
-	if attackerStatus.Attr.Exp <= 0 {
-		t.Errorf("攻击方战斗后应获得经验 (>0), 实际=%d", attackerStatus.Attr.Exp)
-	}
-
-	// 5. 离开房间：Player → Room，Room 移除成员并广播
-	leaveReply, err := cluster.Call(ctx, n.router, target, &player.ControlLeaveRoom{})
-	if err != nil {
-		t.Fatalf("Player 离开房间失败: %v", err)
-	}
-	if !leaveReply.Success {
-		t.Fatalf("Player 离开房间应成功: %s", leaveReply.Reason)
-	}
-	time.Sleep(50 * time.Millisecond)
-	roomInfo3, err := cluster.Call(ctx, n.router, r1, &room.RoomInfo{})
-	if err != nil {
-		t.Fatalf("查询房间失败: %v", err)
-	}
-	if len(roomInfo3.Players) != 1 {
-		t.Errorf("离开后房间人数 期望=1, 实际=%d", len(roomInfo3.Players))
-	}
-	targetLeftStatus, err := cluster.Call(ctx, n.router, target, &player.PlayerStatusReq{})
-	if err != nil {
-		t.Fatalf("查询被攻击者状态失败: %v", err)
-	}
-	if targetLeftStatus.CurrentRoom != 0 {
-		t.Errorf("离开后 CurrentRoom 应为 0, 实际=%d", targetLeftStatus.CurrentRoom)
-	}
-}
-
-func TestPlayerClose(t *testing.T) {
-	n := startTestNode(t)
-	defer n.Close()
-	ctx := context.Background()
-
-	p1 := pid("temp")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100, InitLevel: 1})
-	time.Sleep(30 * time.Millisecond)
-
-	if _, err := cluster.Call(ctx, n.router, p1, &player.Close{}); err != nil {
-		t.Fatalf("关闭失败: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	_, err := cluster.Call(ctx, n.router, p1, &player.PlayerStatusReq{})
+	_, err := actor.Call(ctx, srv.Mgr, ids.PlayerId{OpenID: "ghost"}, &playerapi.Status{})
 	if err == nil {
-		t.Error("关闭后应该查询失败")
+		t.Fatal("对不存在的玩家发请求应当失败")
 	}
-}
-
-// ─── Benchmark ───
-
-func BenchmarkPlayerAttack(b *testing.B) {
-	n := startTestNode(&testing.T{})
-	defer n.Close()
-	ctx := context.Background()
-
-	p1 := pid("bench_atk")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p1, &player.Login{InitHP: 100000, InitLevel: 5})
-	p2 := pid("bench_def")
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, p2, &player.Login{InitHP: 100000, InitLevel: 5})
-	r1 := room.RoomId{RoomId: 999}
-	cluster.Post[json.RawMessage, setup.JsonC, setup.JsonT](n.router, r1, &room.CreateRoom{MaxPlayers: 10})
-	time.Sleep(50 * time.Millisecond)
-	for _, p := range []types.PlayerId{p1, p2} {
-		if _, err := cluster.Call(ctx, n.router, p, &player.ControlJoinRoom{RoomId: 999}); err != nil {
-			b.Fatalf("加入房间失败: %v", err)
-		}
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		cluster.Call(ctx, n.router, p1, &player.ControlAttack{TargetOpenId: "bench_def"})
+	var nf *actor.ActorNotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("期望 ActorNotFoundError，得到 %v", err)
 	}
 }

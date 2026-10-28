@@ -39,7 +39,7 @@ actor-go/
 │   ├── grain_example/        # persistent Grain example
 │   ├── shared_example/       # shared data container example
 │   ├── cluster_example/      # cluster migration example
-│   ├── engineering_example/  # throughput / stress examples
+│   ├── engineering_example/  # recommended package layout + e2e example
 │   └── readmegen/            # injects example_test.go regions into the READMEs
 ├── actor/                    # Actor core
 │   ├── types.go              # ActorId, Request interfaces

@@ -1,255 +1,233 @@
-# engineering_example — Actor-Go 工程化示例
+# engineering_example — 工程化包结构示例
 
-展示在真实项目中如何使用 actor-go 组织代码：**多 Actor 子包 + 子模块二级子包 + grain 持久化 + 公共逻辑库**。
+一个**能跑通的小服务端**：4 个 Actor、一条完整请求链路、grain 持久化、shared 共享配置、端到端测试。
+它演示的是"真实项目里怎么摆包、怎么定消息方向、怎么划持久化边界"，不是框架 API 大全。
 
-## 项目结构
+| 想学什么 | 去哪看 |
+|---|---|
+| 单个 API 怎么用（发送、注册、租约、key 定义） | `../actor_example`、`../grain_example`、`../shared_example` |
+| 多节点、传输层、迁移 | `../rpc_example`、`../cluster_example` |
+| **这些能力在业务代码里怎么组合** | 本目录 |
+
+本示例只用 `actor` + `grain` + `shared` 三个包。传输层不在示例范围内 —— 真实项目里它是
+WebSocket 收到的一帧 JSON，与"包怎么组织"是两件独立的事。
+
+## 跑起来
+
+```bash
+go run ./cmd/engineering_example            # 跑一段剧本化的完整对话，数据落在 ./data
+go run ./cmd/engineering_example -v         # 附带框架日志（每条消息的收发，教学时很有用）
+go run ./cmd/engineering_example -data TMP  # 换一个落盘目录
+go test ./cmd/engineering_example/...       # 端到端用例 + 领域纯函数单测
+```
+
+输出节选（`-v` 关掉时只打印业务对话）：
+
+```
+=== 2. 进 3 号房间：房间把成员进出广播给全体成员 ===
+  alice 状态[join] Lv1 HP 100/100 金币 0 经验 0
+  alice 房间[join] alice 进入房间 3
+  alice 房间[join] bob 进入房间 3
+  bob   状态[join] Lv1 HP 100/100 金币 0 经验 0
+  bob   房间[join] bob 进入房间 3
+
+=== 4. 开打：同组 peer 只 Post，结果靠回执 ===
+  第 3 击
+  bob   状态[damage] Lv1 HP 0/100 金币 0 经验 0
+  bob   房间[report] alice 击倒了 bob
+  alice 状态[combat] Lv2 HP 120/120 金币 30 经验 30
+  alice 房间[report] alice 击倒了 bob
+```
+
+## 目录结构
 
 ```
 cmd/engineering_example/
-├── main.go                          # 入口（仅启动 + 信号处理）
+├── ids/                       全部 ActorId（唯一来源）
+├── game/                      领域规则：纯函数，零框架依赖
+├── protocol/                  面向客户端的报文（下行契约）
 │
-├── console/                         # 交互式 REPL 控制台
-│   ├── console.go                      命令解析 + 格式化输出
-│   └── banner.go                       启动横幅
+├── actors/
+│   ├── world/                 实现包：State + RegisterHandlers + handler
+│   │   └── api/               契约包：别人发给我、我发给别人的消息
+│   ├── room/{,api/}
+│   ├── player/{,api/}         grain：持久化 + 读 shared
+│   └── client/{,api/}         连接：入口层 + 下行出口
 │
-├── logic/                           # 公共游戏逻辑（零框架依赖）
-│   ├── damage.go                       伤害公式、治疗公式、经验公式
-│   └── pathfinding.go                  A* 寻路、距离判定
-│
-├── actor/
-│   ├── combat/                      # 跨 Actor 战斗事件协议（类型名以来源首词标注）
-│   │   ├── damage.go                   PlayerDamage（落到本Player的受击事件）
-│   │   └── result.go                   PlayerCombatResult（被攻击方回传攻击方的结果）
-│   │
-│   ├── player/                      # Player Actor（聚合根）
-│   │   ├── types/                      共享类型 + 状态领域方法（只依赖 actor + grain + logic）
-│   │   │   ├── types.go                    PlayerId + PlayerState + TakeDamage/ApplyHeal
-│   │   │   ├── attr.go                     AttrState
-│   │   │   ├── methods.go                  AttrState/PlayerState 领域方法(AddGold/Upgrade/AddExp)
-│   │   │   ├── inventory.go                Item + InventoryState
-│   │   │   ├── skill.go                    Skill + SkillState
-│   │   │   └── snapshot.go                 GrainState + Snapshotter
-│   │   │
-│   │   ├── attr/                      属性子模块（只依赖 types/ + logic/）
-│   │   │   ├── add_exp.go                  AddExp 请求入口（调 PlayerState.AddExp）
-│   │   │   ├── query.go                    QueryAttr
-│   │   │   └── upgrade.go                  UpgradeAttr 请求入口（调 AttrState.Upgrade）
-│   │   │
-│   │   ├── inventory/                道具子模块（只依赖 types/）
-│   │   │   ├── add.go                      AddItem
-│   │   │   ├── remove.go                   RemoveItem
-│   │   │   ├── list.go                     ListItems
-│   │   │   └── use.go                      UseItem
-│   │   │
-│   │   ├── skill/                    技能子模块（只依赖 types/ + logic/ + combat/）
-│   │   │   ├── learn.go                    ControlLearn（学习技能，玩家意图）
-│   │   │   ├── cast.go                     ControlCast（释放技能，post PlayerDamage）
-│   │   │   └── list.go                     ListSkills
-│   │   │
-│   │   ├── handler.go                     handler+RPC注册（spawn 时显式 Activate）
-│   │   ├── login.go                       登录（spawn handler）
-│   │   ├── attack.go                      ControlAttack（玩家意图，post PlayerDamage）
-│   │   ├── heal.go / addgold.go / close.go
-│   │   ├── joinroom.go / leaveroom.go     ControlJoinRoom / ControlLeaveRoom
-│   │   ├── sendchat.go                    房间内聊天（Player→Room）
-│   │   ├── status.go                      完整状态查询
-│   │   └── check_ownership.go             集群迁移检查
-│   │
-│   ├── room/                         # Room Actor（含房间内聊天 / 战斗逻辑）
-│
-└── setup/                            # 组装层（只依赖 player/ 一层）
-    ├── setup.go                          PersistenceManager + Group + RPC + 集群
-    └── membership.go                     动态成员管理
+├── setup/                     装配：容器 + 全部注册 + 世界初始化
+├── demo/                      脚本化客户端（只依赖 ids + 契约包）
+├── main.go                    入口：装配 → 跑剧本 → 优雅停机
+└── integration_test.go        端到端用例
 ```
 
-## 命名约定：首词即来源
+包分三类，规则只有一条：**依赖只能指向"契约"和"领域"，不能指向别的实现**。
 
-actor 世界里调用方可能来自本节点或集群另一节点，**不存在稳定的"内外"边界**，
-因此用**类型名首词标注来源**，包位置不再承载语义：
+| 包 | 职责 | 谁能 import |
+|---|---|---|
+| `ids` | 4 个 ActorId（`ClientId` / `PlayerId` / `RoomId` / `WorldId`）+ `TheWorld()` | 所有人 |
+| `game` | 伤害 / 成长 / 奖励公式，纯函数，不认识 ActorId 也不认识 Manager | 实现包、测试 |
+| `protocol` | 推给客户端的报文；`Msg` 用未导出方法封闭联合 | `client` / `player` |
+| `actors/*/api` | **契约包**：请求类型（`ReqType`）+ 回复类型 + 对外数据 | 任何 actor 的实现包、`demo` |
+| `actors/*` | **实现包**：State、handler、注册 | 只有 `setup` |
+| `setup` | 装配；唯一同时 import 全部实现包的地方 | `main` |
 
-| 首词 | 含义 | 示例 |
-|------|------|------|
-| `Control*` | 玩家/客户端主动发出的意图（入口） | `ControlAttack` `ControlHeal` `ControlCast` `ControlLearn` `ControlJoinRoom` `ControlLeaveRoom` |
-| `Player*` | 落到某个 Player actor 身上的事件（由另一 actor 推来） | `PlayerDamage`（被攻击方受击） `PlayerCombatResult`（攻击方收回报） |
-| `Room*` | Room actor 主动推给成员的通知 | `RoomChat` `RecordBattle` `ReceiveRoomEvent` |
+`api` 包只依赖 `ids` / `protocol` / 别的 `api`，**绝不 import 实现包** —— 这是让
+`player` 与 `room` 互相发消息却不产生循环依赖的唯一办法。中性命名会让 import 重名，
+所以一律取别名：`playerapi "…/actors/player/api"`。
 
-## 依赖方向
+于是"新增一个 actor"的改动面被固定成两处：`ids` 加一个 ID 类型、`setup` 加一行注册。
+
+## 演员表
+
+| actor | 是什么 | 持久化 | 关键点 |
+|---|---|---|---|
+| `world` | 全服单例，持世界配置 | 否 | shared 容器的 **owner**：只有它能 Publish |
+| `room` | 房间：成员摘要缓存 + 广播者 | 否 | 从不反向 Call 玩家；只做内存缓存 |
+| `player` | 玩家的权威数据 | **grain** | 下行出口；从容器读世界配置 |
+| `client` | 一条连接（≈ WebSocket session） | 否 | 入口层：只翻译形状、沿链转发 |
+
+## 五条规则
+
+### 1. 调用方向：只向右 Call，反向一律 Post
 
 ```
-types/    ──→ actor + grain + logic          ← 状态字段 + 状态领域方法
-logic/    ──→ 标准库                             ← 零框架依赖
-attr/     ──→ types/ + logic/                  ← 子模块（请求入口）
-inventory/──→ types/
-skill/    ──→ types/ + logic/ + combat/        ← 子模块（请求入口）
-combat/   ──→ types/ + room/ + notify/         ← 跨 actor 战斗事件协议
-player/   ──→ types/ + attr/ + inventory/ + skill/ + combat/ + notify/  ← 聚合根入口
-room/     ──→ types/ + notify/
-setup/    ──→ player/ + room/                 ← 只依赖一层
-console/  ──→ player/ + setup/ + cluster/       ← 交互层
-main.go   ──→ setup/ + console/
+client ──Call──> player ──Call──> room
+   ↑                │  ↑
+   └──Post(下行)────┘  └──Post(事件／回执)── 同组 peer
 ```
 
-**无循环依赖**。状态逻辑挂在 `types` 包的状态类型上（`state 带逻辑`），handler 只做入口；
-`combat` 包只承载真正跨 actor 的事件协议（`PlayerDamage`/`PlayerCombatResult`），
-被 `player`/`skill` 共用，避免循环依赖。
+- `Call` 只沿链向右（下游）：`client → player → room`。**反向 Call 与同类互 Call 一律是死锁**。
+- 需要上游的信息？**在上游维护缓存**，不要反向取值。`room` 缓存成员摘要就是这么来的：
+  玩家变更时 Post `BriefChanged` 上报，房间从不回查玩家。
+- 同组 peer（玩家 A 与玩家 B）只 Post：A 等 B 回复、B 又要通知 A，就是 `A→B→A` 的环。
 
-## 核心设计
+攻击回合是这条规则的样板：
 
-### 1. RequestHandler 模式（请求与处理合一）
+```
+alice(player) ──Post Damage──────────> bob(player)      // 只报"我打出了 40 攻击力"
+bob(player)   ──Post CombatResult────> alice(player)    // 回执：掉了多少、死没死、我几级
+alice(player) ──Post BriefChanged────> room             // 上报缓存
+alice(player) ──Post Push(StateUpdate)> alice(client)    // 下行
+```
 
-每个请求文件包含：结构体 + Reply + `ReqType` + `Handle`。
+### 2. 注册语义就是调度语义
+
+`RegisterSpawn` / `RegisterQuery` / `RegisterServe` 的差别不是风格，而是**谁能把 actor 叫起来**：
+
+| actor | 消息 | 注册 | 理由 |
+|---|---|---|---|
+| `client` | `Login` | Serve | 连接由第一条登录消息建立 |
+| `player` | `Login` | Serve | 允许创建：只有登录能建出一个玩家 |
+| `player` | 其余意图 / 事件 | Query | 打给不存在的玩家应当失败，而不是造一个 0 级空壳 |
+| `room` | `Join` | Serve | 第一条 Join 就把房间建起来 |
+| `room` | 其余 | Query | 房间不存在就没有"进错房"之外的语义 |
+| `world` | `Init` | Spawn | 装配层启动时调一次，不需要再被查询 |
+
+`integration_test.go` 的 `TestQueryDoesNotSpawn` 把这条钉住了：对不存在的玩家发请求必须
+返回 `ActorNotFoundError`。
+
+### 3. 下行：首帧全量，之后增量，而且一律 Post
+
+- 新上场 / 重连必须由权威补一次**全量基准**（`protocol.LoginOK`），否则字段停在零值、
+  不报错、也没人发现 —— "活着但变傻"。
+- 之后只推变化（`protocol.StateUpdate`），带上 `Reason` 让客户端知道播哪段表现。
+- 下行全走 `Post`：Post 不等送达，房间广播不会因为某个玩家卡住而拖垮全体。
+
+副作用集中在 `player/player_notify.go` 一个文件里，handler 只表达"决定了什么"。
+
+### 4. 持久化边界：只存"重启后还要的"
+
+`PlayerState` 的字段分两段，区别就是这一点：
 
 ```go
-// attr/add_exp.go
-type AddExp struct{ Amount int `json:"amount"` }
-type AddExpReply struct{ Exp, Level int; LevelUp bool }
-
-func (*AddExp) ReqType(_ types.PlayerId, _ *AddExpReply) string { return "AddExp" }
-
-func (req *AddExp) Handle(ctx *types.PlayerActorCtx, spawning bool) (*AddExpReply, error) {
-    data := &ctx.State().Data
-    data.Attr.Exp += req.Amount
-    // 使用 logic 包计算升级
-    for data.Attr.Exp >= logic.CalcExpToLevel(data.Level) { ... }
-    ctx.State().Persist(ctx)  // 持久化
-    return &AddExpReply{...}, nil
+type PlayerState struct {
+    Level, HP, Gold, Exp int      // 持久化：角色成长
+    Client ids.ClientId  `json:"-"` // 运行时：会话已失效，重连换一个新的
+    Room   ids.RoomId    `json:"-"` // 运行时：房间成员表在房间那边，重启一起归零
+    Vars   shared.Reader `json:"-"` // 运行时：世界配置重新订阅即可
 }
 ```
 
-注册极简，handler.go 中一行一个：
+落盘结果（`./data/Player/alice.json`）干净得能直接对：
 
-```go
-actor.RegisterQueryHandler2(b, (*attr.AddExp)(nil))
+```json
+{ "generation": 1, "data": { "level": 2, "hp": 120, "gold": 30, "exp": 30 } }
 ```
 
-### 2. 依赖翻转（player 作为聚合根）
+`grain.SetupGrain` 托管了整个生命周期：激活（加载或新建）、按间隔存盘、退出时落盘并释放
+租约。handler 里看不到 `Activate` / `Persist`。
 
-子模块不依赖 player 包，player 包主动导入所有子模块进行注册：
+### 5. 读多写少的全局事实走 shared 容器
 
-- 子模块 `attr/` 只依赖 `types/` + `logic/`
-- `player/handler.go` import `attr/` + `inventory/` + `skill/`，集中注册
-- `setup/` 只调用 `player.RegisterHandlers()` + `player.RegisterRPC()`，不知道子模块存在
-
-### 3. grain 持久化
-
-`player/types/snapshot.go` 定义 `PlayerSnapshotter = ShotSelf[PlayerState]`，完整保存 PlayerState。
-
-```go
-// handler.go — spawn 时显式激活
-actor.RegisterSpawn(b, func(ctx *PlayerActorCtx, req *Login, spawning bool) (actor.OkReply, error) {
-    res, err := ctx.State().Activate(ctx, pm, types.PlayerSnapshotter{})
-    if err != nil {
-        return actor.OK, err
-    }
-    return req.Handle(ctx, spawning, res)
-})
-
-// 业务 handler 中
-ctx.State().Persist(ctx)     // 保存 + 续租
-ctx.State().Deactivate(ctx)  // 保存 + 释放租约 + Quit
-```
-
-### 4. logic/ 公共库
-
-与 actor 框架完全解耦，只依赖标准库：
-
-| 文件 | 功能 | 引用方 |
-|------|------|--------|
-| `damage.go` | `CalcDamage`, `CalcHeal`, `CalcExpToLevel` | `skill/cast.go`（技能伤害）, `types.PlayerState.TakeDamage`（受击伤害） |
-| `pathfinding.go` | `FindPath`(A*), `InRange`, `ManhattanDist` | `skill/cast.go` |
-
-可独立单元测试，不依赖任何 actor 状态。
-
-### 5. 模块联动：成长闭环
-
-子模块不是各自为政的演示，而是被一条**战斗成长闭环**串起来：
+世界配置每个玩家都要读，但几乎不变。让玩家 `Call world` 会把它变成扇入热点，
+所以：
 
 ```
-ControlAttack / ControlCast ──post──▶ PlayerDamage（落到被攻击方：同房间校验 + 扣血 + Room广播）
-   │                                        │
-   │ (被攻击方)                              └─ 扣血后 post PlayerCombatResult 回攻击方
-   │                                               │
-   │ (攻击方收到回传后，才结算奖励)                   │
-   └──────────────────────────────────────────────┘
-               攻击方获得 金币 + 经验（AttrState.AddGold / PlayerState.AddExp）
-                                  │
-                  AddExp 满则升级 ─┤ 提升 Atr.Atk/Def + MaxHP + 回满血
-                                  │
-           属性越强 ─▶ 下次 ControlAttack/ControlCast 伤害越高（CalcDamage 含 Atk）
-                                  │
-           掉血后续航 ─▶ ControlHeal（消耗金币，受 MaxHP 上限）或 use potion（受 MaxHP 上限）
-                                  │
-           金币出口 ─▶ heal / upgrade / learn；金币来源 ─▶ 战斗回报 / addgold
+world ──PublishWait(ConfigKey)──> shared 容器 ──推送──> player 的 Reader 缓存
+player ──Watch(ConfigKey)──────────────────────────────┘ （命中缓存，不触网）
 ```
 
-关键结合点：
+- owner 用 `PublishWait`（要"已生效"的语义），读者用 `Watch`（首次订阅，之后吃缓存）。
+- 权威数据始终在 `world` 的 State 里，容器只持副本。
+- 测试里读到 `ExpRate == 200` 是**轮询**等来的：推送是异步的，最终一致。
 
-| 模块 A | 模块 B | 结合方式 |
-|--------|--------|----------|
-| `ControlAttack` / `ControlCast`（伤害意图） | `Attr`（属性） | 伤害含 Atk，升级提升 Atk 直接放大输出 |
-| `PlayerCombatResult`（回传） | `AttrState.AddGold` / `PlayerState.AddExp`（资源） | 攻击方**收到对面状态通知后**才结算金币+经验 |
-| `PlayerState.AddExp`（升级） | `HP` / `MaxHP`（生命） | 升级提升 MaxHP 并回满血 |
-| `ControlHeal` / `use potion`（续航） | `Gold` / `MaxHP` | 治疗消耗金币且受 MaxHP 上限约束 |
-| `ControlAttack`（普通攻击） | `ControlCast`（技能攻击） | 二者共用 `combat.PlayerDamage` 受击链路，逻辑只有一份 |
-| `combat.PlayerDamage` | `room.RecordBattle` | 受击后 post Room 广播战斗记录给同房间成员 |
+## 三条链路
 
-这样各模块从「孤立的请求-处理」变成「互相喂养的状态机」：**攻击产生回传 → 回传结算资源 → 资源带来成长 → 成长提升战力 → 战力又放大攻击**。奖励严格发生在「收到对面状态通知之后」，跨 actor 与 component 内状态变更的边界清晰。
-
-## 启动
-
-```bash
-# 单节点（承载所有 Actor）
-go run . -type all-in-one -addr localhost:8001
-
-# 多节点异构集群
-go run . -type player-server -addr localhost:8001
-go run . -type room-server   -addr localhost:8002 -seeds localhost:8001
-```
-
-## 交互命令
+### 登录
 
 ```
-=== Player ===
-login <id> <hp>                      创建玩家
-heal <id> <amt>                      治疗
-gold <id> <amt>                      增加金币
-status <id>                          查看完整状态（含属性/背包/技能/当前房间）
-
-=== 属性子模块 ===
-exp <id> <amt>                       增加经验
-attrs <id>                           查看属性
-upgrade <id> <stat>                  升级属性 (atk/def/speed)
-
-=== 道具子模块 ===
-additem <id> <itemId> <name> <cnt> <type>   添加道具 (potion/weapon/material)
-rmitem <id> <itemId> <cnt>                  移除道具
-bag <id>                                    查看背包
-use <id> <itemId>                           使用道具
-
-=== 技能子模块 ===
-learn <id> <skillId> <name> <cost>          学习技能
-cast <id> <skillId> <target> <tx> <ty>      释放技能（含坐标距离判定）
-skills <id>                                 技能列表
-
-=== 其他 ===
-room <id> <max>        创建房间
-join <rid> <pid>       加入房间
-roominfo <id>          查询房间(成员/聊天/战斗)
-
-=== 跨Actor通信（Player 进入房间后）===
-pjoin <pid> <rid>      Player 加入房间（记录当前房间）
-chat <pid> <msg>       玩家在房间内聊天 Player→Room→同房间广播
-attack <atk> <tgt>     玩家房间内攻击 Player→(post)Player→Room广播
-leave <pid>            玩家离开房间 Player→Room
-info / nodes / migrate 集群管理
+demo ──Call Login────> client ──Call Login{Client}──> player
+                                                     ├─ grain 激活（加载或新建）
+                                                     ├─ 绑定下行出口
+                                                     └─ Post Push(LoginOK) ──> client
 ```
 
-## 新增子模块的步骤
+### 聊天
 
-1. 在 `player/types/` 添加子模块数据结构（一个文件）
-2. 在 `player/` 下新建子模块目录，每个请求一个文件（结构体+Reply+ReqType+Handle）
-3. 在 `player/handler.go` 中 import 子模块 + 一行 `RegisterQueryHandler2`
-4. 在 `player/handler.go` 的 `RegisterRPC` 中加一行 `rpc.RegisterRequest`
-5. 在 `console/console.go` 中添加 REPL 命令处理
+```
+client ──Call Say──> player ──Call Chat──> room ──AMulticast RoomEvent──> 每个成员 player
+                                                                      └─ Post Push ──> client
+```
 
-无需修改 `setup/` 和 `main.go`。
+房间是唯一的广播者，并且由它裁决"你是不是这个房间的成员" —— 客户端说什么不算数。
+
+### 攻击（三击必杀）
+
+Lv1 攻击力 40，对手 0 防御 → 每击 40 点：`100 → 60 → 20 → 倒地`。
+奖励规则：命中 5 金币 / 10 经验，击杀换成一整份 20 / 40（按目标等级放大，不叠加）。
+所以 alice 拿到 `10 + 10 + 40 = 60` 经验，1 级需要 30 → 升到 2 级余 30 经验、升级回满 120 血。
+
+## 新增一个 actor 的步骤
+
+以"加一个排行榜 actor"为例：
+
+1. `ids` 加 `RankId`（`ActorType()` + `String()`）。
+2. 建 `actors/rank/api/api.go`：写请求类型与 `ReqType`；需要回复就定义回复类型。
+3. 建 `actors/rank/rank_state.go`（State + 领域方法）与 `rank_register.go`
+   （`actor.Serve` + `RegisterXxx`；持久化就加 `grain.SetupGrain`，要读共享数据就加
+   `shared.ServeReader`）。
+4. `setup.New` 里加一行 `rank.RegisterHandlers(mgr)`。
+5. 需要它通知别人时，把通知类型放进对应接收方的 `api` 包，用 `Post` 发出去。
+
+## 与真实项目（erosion 服务端）的对照
+
+| 本示例 | 真实项目 |
+|---|---|
+| `ids/` | `server/ids/` |
+| `game/` | `server/game/`（领域层，不依赖协议与 actor） |
+| `protocol/` | `server/protocol/` + `server/game/*`（由 codegen 产出客户端代码） |
+| `actors/<x>/{,api/}` | `server/actorapp/<x>/` + `<x>_api/` |
+| `setup/` | `server/actorapp/setup/` + `server/app/` |
+| `client` actor | `session` actor（一条连接一个） |
+| `demo/` | `test_client/`（e2e 测试客户端） |
+| `WorldId{ID:"w0"}` 单例 | 世界 actor + 按 region 划分的 RegionActor |
+
+差异只有规模：真实项目有 10 个 actor 包、上百条消息、按 region 分片。包的分法、
+消息方向、首帧全量与缓存上报的纪律是一致的。
+
+## 这个示例刻意不做的事
+
+- **传输层**：没有 WebSocket，`client` actor 直接把报文塞进收件箱（`Drain` 取走）。
+- **集群**：没有多节点、没有迁移。见 `../cluster_example`。
+- **复活 / 离线托管 / 场景切换**：倒地即停，避免示例被"回合之外的状态机"淹没。
+- **配置与数值表**：数值写死在 `game/combat.go`，真实项目从 YAML 加载。
