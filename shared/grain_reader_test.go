@@ -48,7 +48,7 @@ func serveGrainReader(t *testing.T, mgr *actor.Manager, pm *grain.PersistenceMan
 	t.Helper()
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[grainReaderId, grainReaderState]) {
 		ServeReader(b, func(s *grainReaderState) *Reader { return &s.Data.Vars })
-		grain.SetupGrain(b, pm, nil)
+		grain.SetupGrain(b, pm, grain.ShotSelf[grainReaderData]{}, nil)
 		// Serve（而非 Query）：需要能唤起未被 spawn 的 grain 读者。
 		actor.RegisterServe[grainReaderId, grainReaderState, *grainReadReq, *grainReadRep, grainReadReq, grainReadRep](b,
 			func(ctx *actor.ActorContext[grainReaderId, grainReaderState], req *grainReadReq, _ bool) (*grainReadRep, error) {

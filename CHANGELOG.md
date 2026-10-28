@@ -22,10 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 示例全面翻新：新增 `actor` / `shared` / `grain` / `rpc` 四个包的 `example_test.go`，
   README 中的示例改为由上面的标记注入；新增 README 小节覆盖 `SetOnSpawn` 钩子与
   `CtxValue`。
-- 修正三处过期示例：`actor.Serve(mgr, 100, ...)` 旧签名（现为 `actor.Options{BufMails}`）、
-  `ctx.Ref(roomId)` 跨 Group 引用（`ActorRef` 只能同 Group）、
-  `grain.State[..., *grain.ShotSelf[D]]`（`ShotSelf` 是值接收者，写指针会在 Activate 时
-  nil 指针 panic，须用值类型）。
+- 修正两处过期示例：`actor.Serve(mgr, 100, ...)` 旧签名（现为 `actor.Options{BufMails}`）、
+  `ctx.Ref(roomId)` 跨 Group 引用（`ActorRef` 只能同 Group）。
+- `grain` 的快照器实例改为由调用方显式传入：`SetupGrain(b, pm, snap, onActivate)` /
+  `State.Activate(ctx, pm, snap)`。框架不再用 `var t T` 自造零值，因此删除了
+  `snapshotterOf` 与反射：T 只负责类型层面（锚定 S 并校验实例形态），实例类型由 `snap T`
+  与 T 在编译期对齐（写错形态直接编译失败）。也不再要求快照器无状态——值类型实例每个
+  Grain 一份副本，指针类型实例在 Group 内共享；只有当快照器方法用指针接收者且不访问
+  接收者时，传 nil 才是安全的（`ShotSelf` 是值接收者，写 `*ShotSelf[D]` 时必须传 `&{}`）。
 - 修正 `cmd/actor_example` / `cmd/rpc_example` / `cmd/cluster_example` 缺少 `ctx.Open()`
   导致 Actor 处理完首条消息即被回收（后续 `Call` 报 `actor not found`）；
   `cmd/cluster_example` 不再对同一 Group 二次 `Serve`（会 panic），迁移 handler 与业务

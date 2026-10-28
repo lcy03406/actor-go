@@ -751,11 +751,11 @@ if err := rpc.Broadcast(client, &DemoClose{}); err != nil {
 ## Grain —— 持久化 Actor
 
 Grain 为 Actor 增加了**基于租约管理的持久化**能力。在首条（spawn）消息中，你显式调用
-`State.Activate(ctx, pm)`：它获取分布式租约、加载已持久化的状态（若不存在则全新开始），并打开 Actor ——
+`State.Activate(ctx, pm, snap)`，并把快照器实例传给它：它获取分布式租约、加载已持久化的状态（若不存在则全新开始），并打开 Actor ——
 返回数据是**loaded（已加载）**还是 **created（已创建）**。在停用时，状态被保存，租约被释放。
 
 Actor **不会**在处理 spawn 消息前被自动激活。你需通过 `ctx.Open()`（普通 Actor）或
-`ctx.State().Activate(ctx, pm)`（Grain）在 spawn/serve 回调中决定何时激活。若不激活，
+`ctx.State().Activate(ctx, pm, snap)`（Grain）在 spawn/serve 回调中决定何时激活。若不激活，
 该 Actor 在消息处理完成后保持空闲，并在空闲时被销毁（或被下一条 spawn 消息重新激活）。
 
 ### 概念
@@ -781,7 +781,7 @@ pm := grain.NewPersistenceManager(
 
 actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
 	// 生命周期托管给框架：OnSpawn 自动 Activate + 定时存盘，退出时自动 Persist + 释放租约。
-	grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+	grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, func(ctx *GrainCtx, created bool) error {
 		if created { // 仅首次创建时初始化业务数据
 			ctx.State().Data.HP = 100
 			ctx.State().Data.Level = 1

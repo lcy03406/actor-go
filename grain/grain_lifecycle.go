@@ -35,7 +35,7 @@ type OnActivateFn[A actor.ActorId, S any, P any, K Snapshotter[S, P]] func(
 //	)
 //
 //	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
-//	    grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+//	    grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, func(ctx *GrainCtx, created bool) error {
 //	        if created {
 //	            ctx.State().Data.HP = 100 // 首次创建初始化
 //	        }
@@ -44,15 +44,17 @@ type OnActivateFn[A actor.ActorId, S any, P any, K Snapshotter[S, P]] func(
 //	    actor.RegisterSpawn(b, handleLogin)
 //	})
 //
-// 注意 GrainState 的最后一个类型参数是 Snapshotter：ShotSelf 的方法都是值接收者，
-// 必须用值类型 grain.ShotSelf[D]，写成 *grain.ShotSelf[D] 会在 Activate 时 nil 指针 panic。
+// snap 是快照器实例，必须与 GrainState 最后一个类型参数 K 的类型一致：
+// K 为值类型时传零值（grain.ShotSelf[D]{}），为指针类型时传实例地址（&MySnapshotter{}）；
+// 仅当快照器方法用指针接收者且不访问接收者时，传 nil 才安全。
 func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 	b *actor.RegistryBuilder[A, State[A, S, P, K]],
 	pm *PersistenceManager,
+	snap K,
 	onActivate OnActivateFn[A, S, P, K],
 ) {
 	b.SetOnSpawn(func(ctx *actor.ActorContext[A, State[A, S, P, K]]) error {
-		created, err := ctx.State().Activate(ctx, pm)
+		created, err := ctx.State().Activate(ctx, pm, snap)
 		if err != nil {
 			ctx.Logger().Warn("grain activate failed", "err", err)
 			return err

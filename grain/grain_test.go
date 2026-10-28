@@ -95,7 +95,7 @@ func activatingSpawn[Q any, R any](
 ) func(ctx *testActorCtx, req Q, spawning bool) (R, error) {
 	return func(ctx *testActorCtx, req Q, spawning bool) (R, error) {
 		if spawning {
-			if _, err := ctx.State().Activate(ctx, pm); err != nil {
+			if _, err := ctx.State().Activate(ctx, pm, TestGrainSnapshotter{}); err != nil {
 				var zero R
 				return zero, err
 			}
@@ -354,6 +354,163 @@ func TestSnapshotter_ShotSelf_Struct(t *testing.T) {
 	s.LoadSnapshot(&restored, snapshot)
 	if restored.Name != "test" || restored.Count != 10 || len(restored.Tags) != 2 {
 		t.Errorf("LoadSnapshot struct mismatch: %+v", restored)
+	}
+}
+
+// nilSafeSnapshotter 用指针接收者实现，且所有方法都不访问接收者：
+// 因此把 nil 指针作为实例传入是安全的，用于验证框架不做判空、直接把实例交给快照器。
+type nilSafeSnapshotter struct{}
+
+func (*nilSafeSnapshotter) NewPersist(data *TestGrainData) *TestGrainSnapshot {
+	return &TestGrainSnapshot{}
+}
+
+func (*nilSafeSnapshotter) LoadSnapshot(data *TestGrainData, snapshot *TestGrainSnapshot) {
+	data.Value = snapshot.Value
+}
+
+func (*nilSafeSnapshotter) TakeSnapshot(data *TestGrainData) *TestGrainSnapshot {
+	return &TestGrainSnapshot{Value: data.Value}
+}
+
+// TestLifecycle_NilPointerSnapshotter 验证指针接收者的快照器可以传 nil：
+// 框架不判空，nil 只要方法体不触摸接收者就是合法实例。
+func TestLifecycle_NilPointerSnapshotter(t *testing.T) {
+	type nilPtrState = State[TestGrainId, TestGrainData, TestGrainSnapshot, *nilSafeSnapshotter]
+	type nilPtrCtx = actor.ActorContext[TestGrainId, nilPtrState]
+
+	pm := newTestPMWithDir(t.TempDir())
+	var shot *nilSafeSnapshotter // nil 实例
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, nilPtrState]) {
+		activate := func(ctx *nilPtrCtx, spawning bool) error {
+			if !spawning {
+				return nil
+			}
+			_, err := ctx.State().Activate(ctx, pm, shot)
+			return err
+		}
+		actor.RegisterSpawn(b, func(ctx *nilPtrCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilPtrCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *nilPtrCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Deactivate(ctx)
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *nilPtrCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "nil-ptr-grain"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 10}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestDeactivateReq{}); err != nil {
+		t.Fatalf("deactivate failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("second spawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 10 {
+		t.Errorf("want 10, got %d", q.Value)
+	}
+}
+
+// TestLifecycle_PointerSnapshotter 验证快照器类型参数写成指针时，
+// 激活 / 存盘 / 重新加载的完整链路依然正常。
+func TestLifecycle_PointerSnapshotter(t *testing.T) {
+	type ptrState = State[TestGrainId, TestGrainData, TestGrainSnapshot, *TestGrainSnapshotter]
+	type ptrCtx = actor.ActorContext[TestGrainId, ptrState]
+
+	pm := newTestPMWithDir(t.TempDir())
+	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, ptrState]) {
+		activate := func(ctx *ptrCtx, spawning bool) error {
+			if !spawning {
+				return nil
+			}
+			_, err := ctx.State().Activate(ctx, pm, &TestGrainSnapshotter{})
+			return err
+		}
+		actor.RegisterSpawn(b, func(ctx *ptrCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestSpawnReply{Activated: true}, nil
+		})
+		actor.RegisterServe(b, func(ctx *ptrCtx, req *TestMutateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Data.Value += req.Add
+			return actor.OK, nil
+		})
+		actor.RegisterServe(b, func(ctx *ptrCtx, req *TestDeactivateReq, spawning bool) (actor.OkReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return actor.OK, err
+			}
+			ctx.State().Deactivate(ctx)
+			return actor.OK, nil
+		})
+		actor.RegisterQuery(b, func(ctx *ptrCtx, req *TestQueryReq, spawning bool) (*TestQueryReply, error) {
+			if err := activate(ctx, spawning); err != nil {
+				return nil, err
+			}
+			return &TestQueryReply{Value: ctx.State().Data.Value}, nil
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	id := TestGrainId{Name: "ptr-grain"}
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestMutateReq{Add: 10}); err != nil {
+		t.Fatalf("mutate failed: %v", err)
+	}
+	if _, err := actor.Call(ctx, mgr, id, &TestDeactivateReq{}); err != nil {
+		t.Fatalf("deactivate failed: %v", err)
+	}
+	actor.JoinActor(mgr, id)
+
+	if _, err := actor.Call(ctx, mgr, id, &TestSpawnReq{}); err != nil {
+		t.Fatalf("second spawn failed: %v", err)
+	}
+	q, err := actor.Call(ctx, mgr, id, &TestQueryReq{})
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	if q.Value != 10 {
+		t.Errorf("want 10, got %d", q.Value)
 	}
 }
 
@@ -754,7 +911,7 @@ func (*TestQuitReq) ReqType(_ TestGrainId, _ actor.OkReply) string { return "tes
 func TestSetupGrain_AutoActivateAndQuitPersist(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
 	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		SetupGrain(b, pm, nil)
+		SetupGrain(b, pm, TestGrainSnapshotter{}, nil)
 		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: ctx.State().Activated()}, nil
 		})
@@ -810,7 +967,7 @@ func TestSetupGrain_OnActivateInit(t *testing.T) {
 	pm := newTestPMWithDir(t.TempDir())
 	var initCount, loadedCount int
 	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		SetupGrain(b, pm, func(ctx *testActorCtx, created bool) error {
+		SetupGrain(b, pm, TestGrainSnapshotter{}, func(ctx *testActorCtx, created bool) error {
 			if created {
 				initCount++
 				ctx.State().Data.Value = 1000 // 首次创建初始化
@@ -866,7 +1023,7 @@ func TestSetupGrain_AutoPersistInterval(t *testing.T) {
 		WithAutoPersistInterval(80*time.Millisecond),
 	)
 	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, testState]) {
-		SetupGrain(b, pm, nil)
+		SetupGrain(b, pm, TestGrainSnapshotter{}, nil)
 		actor.RegisterSpawn(b, func(ctx *testActorCtx, req *TestSpawnReq, spawning bool) (*TestSpawnReply, error) {
 			return &TestSpawnReply{Activated: true}, nil
 		})
@@ -948,7 +1105,7 @@ func TestNilSnapshot_PersistSkipsSave(t *testing.T) {
 		WithNodeId("node-1"),
 	)
 	mgr := setupManager(func(b *actor.RegistryBuilder[TestGrainId, nilState]) {
-		SetupGrain(b, pm, func(ctx *nilActorCtx, created bool) error {
+		SetupGrain(b, pm, TestGrainNilSnapshotter{}, func(ctx *nilActorCtx, created bool) error {
 			if created {
 				ctx.State().Data.Value = 555
 			}

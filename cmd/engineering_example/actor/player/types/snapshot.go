@@ -1,9 +1,10 @@
 // snapshot.go 定义 PlayerData 的快照/持久化支持。
 //
 // 【设计说明】
-//   PlayerState 同时作为业务数据和快照类型（使用 ShotSelf），
-//   持久化时完整保存整个 PlayerState（含所有子模块数据）。
-//   如果需要对不同子模块做不同粒度的持久化，可以定义独立的 Snapshot 结构体。
+//
+//	PlayerState 同时作为业务数据和快照类型（使用 ShotSelf），
+//	持久化时完整保存整个 PlayerState（含所有子模块数据）。
+//	如果需要对不同子模块做不同粒度的持久化，可以定义独立的 Snapshot 结构体。
 package types
 
 import (
@@ -24,8 +25,8 @@ type PlayerSnapshotter = grain.ShotSelf[PlayerState]
 //	    ctx.State().Deactivate(ctx) // 停用 + 释放租约
 //	}
 //
-// T 参数是值类型 ShotSelf[PlayerState]：ShotSelf 的方法都是值接收者，
-// 写成指针（*PlayerSnapshotter）时 Activate 阶段的 `var t T` 是 nil 指针，会直接 panic。
+// T 参数是值类型 ShotSelf[PlayerState]，激活时传零值 PlayerSnapshotter{}；
+// 写成指针类型（*PlayerSnapshotter）时则需传 &PlayerSnapshotter{}。
 type GrainState = grain.State[PlayerId, PlayerState, PlayerState, PlayerSnapshotter]
 
 // PlayerActorCtx 是 Player Actor 在 grain 模式下的 ActorContext 类型别名。

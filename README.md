@@ -775,9 +775,9 @@ if err := rpc.Broadcast(client, &DemoClose{}); err != nil {
 
 ## Grain — Persistent Actor
 
-Grain adds **lease-managed persistence** to Actors. On the first (spawn) message you explicitly call `State.Activate(ctx, pm)`: it acquires a distributed lease, loads persisted state (or starts fresh if none exists), and opens the Actor — returning whether the data was **loaded** or **created**. On deactivation, state is saved and the lease is released.
+Grain adds **lease-managed persistence** to Actors. On the first (spawn) message you explicitly call `State.Activate(ctx, pm, snap)`, passing the snapshotter instance: it acquires a distributed lease, loads persisted state (or starts fresh if none exists), and opens the Actor — returning whether the data was **loaded** or **created**. On deactivation, state is saved and the lease is released.
 
-Actors are **not** activated automatically before handling the spawn message. You decide when to activate by calling `ctx.Open()` (plain Actors) or `ctx.State().Activate(ctx, pm)` (Grain), inside the spawn/serve callback. If you don't activate, the Actor stays idle after the message and is destroyed on idle (or re-activated by the next spawn message).
+Actors are **not** activated automatically before handling the spawn message. You decide when to activate by calling `ctx.Open()` (plain Actors) or `ctx.State().Activate(ctx, pm, snap)` (Grain), inside the spawn/serve callback. If you don't activate, the Actor stays idle after the message and is destroyed on idle (or re-activated by the next spawn message).
 
 ### Concepts
 
@@ -802,7 +802,7 @@ pm := grain.NewPersistenceManager(
 
 actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
 	// 生命周期托管给框架：OnSpawn 自动 Activate + 定时存盘，退出时自动 Persist + 释放租约。
-	grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+	grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, func(ctx *GrainCtx, created bool) error {
 		if created { // 仅首次创建时初始化业务数据
 			ctx.State().Data.HP = 100
 			ctx.State().Data.Level = 1

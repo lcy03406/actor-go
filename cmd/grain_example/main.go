@@ -18,8 +18,8 @@ import (
 
 type (
 	PlayerId = grainPlayerId
-	// GrainState 的最后一个参数是 Snapshotter：ShotSelf 的方法都是值接收者，
-	// 必须用值类型 grain.ShotSelf[PlayerData]；写成指针会在 Activate 时 nil 指针 panic。
+	// GrainState 的最后一个参数是 Snapshotter：这里用值类型 grain.ShotSelf[PlayerData]，
+	// 注册时把零值实例传给 SetupGrain。
 	GrainState = grain.State[PlayerId, PlayerData, PlayerData, grain.ShotSelf[PlayerData]]
 	GrainCtx   = actor.ActorContext[PlayerId, GrainState]
 	RegBuilder = actor.RegistryBuilder[PlayerId, GrainState]
@@ -81,7 +81,7 @@ func setupGrainPlayer(mgr *actor.Manager, pm *grain.PersistenceManager) {
 		// 使用 SetupGrain 将生命周期托管给框架：
 		// OnSpawn 自动 Activate 并按 onActivate 回调初始化，
 		// OnQuit 自动 Persist + 释放租约，并按 WithAutoPersistInterval 定时存盘。
-		grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+		grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, func(ctx *GrainCtx, created bool) error {
 			if created {
 				// 首次创建时初始化数据（initialized HP/Level 由 Login 传入）。
 				ctx.State().Data.HP = 100

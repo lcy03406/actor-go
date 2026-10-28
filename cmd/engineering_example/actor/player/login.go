@@ -10,7 +10,7 @@ import (
 
 // Login 是玩家登录（创建 Actor）的请求。
 // 作为 spawn handler，由 handler 注册处的闭包在 spawning 时调用
-// ctx.State().Activate(ctx, pm) 激活，并据返回结果初始化数据。
+// ctx.State().Activate(ctx, pm, types.PlayerSnapshotter{}) 激活，并据返回结果初始化数据。
 type Login struct {
 	InitHP    int `json:"initHP"`
 	InitLevel int `json:"initLevel"`

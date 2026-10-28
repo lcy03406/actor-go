@@ -13,6 +13,10 @@ type Snapshotter[D any, P any] interface {
 
 // ShotSelf 是一个内置的 Snapshotter 实现：快照类型就是业务数据自身（P == D），
 // 即整份数据直接作为快照保存与加载，不做任何转换。适用于无需裁剪/转换的简单场景。
+//
+// 方法都是值接收者，因此 ShotSelf[D] 与其指针 *ShotSelf[D] 都满足 Snapshotter。
+// 前者传零值 grain.ShotSelf[D]{}，后者必须传 &grain.ShotSelf[D]{}——
+// 值接收者的方法在 nil 指针上要解引用，不能传 nil。
 type ShotSelf[D any] struct{}
 
 func (s ShotSelf[D]) NewPersist(data *D) *D {

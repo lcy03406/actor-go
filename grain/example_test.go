@@ -29,8 +29,8 @@ type PlayerData struct {
 	Level int `json:"level"`
 }
 
-// GrainState 的最后一个类型参数是 Snapshotter 实现，用值类型 grain.ShotSelf[PlayerData]：
-// ShotSelf 的方法都是值接收者，写成指针（*grain.ShotSelf[...]）会在 Activate 时因 nil 指针 panic。
+// GrainState 的最后一个类型参数是 Snapshotter 实现，这里用值类型 grain.ShotSelf[PlayerData]，
+// 注册时传零值 grain.ShotSelf[PlayerData]{}；写成指针类型则需传 &grain.ShotSelf[PlayerData]{}。
 type (
 	GrainState = grain.State[PlayerId, PlayerData, PlayerData, grain.ShotSelf[PlayerData]]
 	GrainCtx   = actor.ActorContext[PlayerId, GrainState]
@@ -69,7 +69,7 @@ func Example_setup() {
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
 		// 生命周期托管给框架：OnSpawn 自动 Activate + 定时存盘，退出时自动 Persist + 释放租约。
-		grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+		grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, func(ctx *GrainCtx, created bool) error {
 			if created { // 仅首次创建时初始化业务数据
 				ctx.State().Data.HP = 100
 				ctx.State().Data.Level = 1
@@ -99,7 +99,7 @@ func Example_state() {
 	pm := grain.NewPersistenceManager(grain.WithNodeId("node-1"))
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
-		grain.SetupGrain(b, pm, nil)
+		grain.SetupGrain(b, pm, grain.ShotSelf[PlayerData]{}, nil)
 
 		actor.RegisterQuery(b, func(ctx *GrainCtx, req *SaveNow, _ bool) (actor.OkReply, error) {
 			// region: state

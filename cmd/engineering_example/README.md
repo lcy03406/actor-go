@@ -137,7 +137,7 @@ actor.RegisterQueryHandler2(b, (*attr.AddExp)(nil))
 ```go
 // handler.go — spawn 时显式激活
 actor.RegisterSpawn(b, func(ctx *PlayerActorCtx, req *Login, spawning bool) (actor.OkReply, error) {
-    res, err := ctx.State().Activate(ctx, pm)
+    res, err := ctx.State().Activate(ctx, pm, types.PlayerSnapshotter{})
     if err != nil {
         return actor.OK, err
     }
