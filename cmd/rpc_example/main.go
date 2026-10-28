@@ -80,6 +80,7 @@ func runServer(addr string) (*JsonServer, *actor.Manager) {
 
 	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 		actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+			ctx.Open() // 不 Open 的 Actor 处理完本条消息即被回收，后续 Call 会报 actor not found
 			ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
 			ctx.Logger().Info("player login", "hp", req.InitHP, "level", req.InitLevel)
 			return actor.OK, nil

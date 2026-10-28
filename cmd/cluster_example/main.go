@@ -249,11 +249,37 @@ var options100 = actor.Options{BufMails: 100}
 func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Router {
 	mgr := actor.NewManager(slog.Default())
 
+	// 先建集群拓扑：下面 Serve 里注册的迁移 handler 需要引用 placement / membership。
+	// （同一个 ActorType 只能 Serve 一次，重复 Serve 会 panic，所以 handler 必须在这一次注册齐全。）
+	self := cluster.Node{ID: id, Addr: addr, Type: nodeType}
+	members := []cluster.Node{self}
+	if seeds != "" {
+		for _, seed := range strings.Split(seeds, ",") {
+			seed = strings.TrimSpace(seed)
+			if seed == "" || seed == addr {
+				continue
+			}
+			seedType := inferTypeFromAddr(seed)
+			members = append(members, cluster.Node{
+				ID:   fmt.Sprintf("%s-%s", seedType, seed),
+				Addr: seed,
+				Type: seedType,
+			})
+		}
+	}
+
+	mem := newDynamicMembership(self, members...)
+	globalMembership = mem // 保存全局引用，供 migrate 命令使用
+	placement := cluster.NewConsistentHashPlacement(128).WithGroupMapping(groupMapping)
+
 	// 根据节点类型注册 Actor Group
 	switch nodeType {
 	case "player-server", "all-in-one":
 		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-			actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, spawning bool) (actor.OkReply, error) {
+				if spawning {
+					ctx.Open() // 不 Open 的 Actor 处理完本条消息即被回收
+				}
 				ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
 				log.Printf("[Player] %s 登录 HP=%d Level=%d", ctx.Id().String(), req.InitHP, req.InitLevel)
 				return actor.OK, nil
@@ -268,7 +294,7 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 				log.Printf("[Player] %s 治疗 %d, HP=%d", ctx.Id().String(), req.Amount, ctx.State().HP)
 				return &HealReply{NewHP: ctx.State().HP}, nil
 			})
-			actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *ClosePlayer, _ bool) (actor.OkReply, error) {
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *ClosePlayer, _ bool) (actor.OkReply, error) {
 				log.Printf("[Player] %s 退出", ctx.Id().String())
 				ctx.Quit()
 				return actor.OK, nil
@@ -279,11 +305,26 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 					Level: ctx.State().Level,
 				}, nil
 			})
+			// 迁移检查：拓扑变化时广播，由各 Actor 自己判断是否应迁走
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *CheckOwnership, _ bool) (actor.OkReply, error) {
+				selfID := mem.Self().ID
+				target, leave := cluster.CheckOwnership(placement, mem.Members(), selfID, "Player", ctx.Id().String())
+				if leave {
+					log.Printf("[迁移] Player %s 应迁移到 %s, 当前 HP=%d Level=%d",
+						ctx.Id().String(), target, ctx.State().HP, ctx.State().Level)
+				} else {
+					log.Printf("[迁移] Player %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
+				}
+				return actor.OK, nil
+			})
 		})
 	}
 	if nodeType == "room-server" || nodeType == "all-in-one" {
 		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
-			actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *CreateRoom, _ bool) (actor.OkReply, error) {
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *CreateRoom, spawning bool) (actor.OkReply, error) {
+				if spawning {
+					ctx.Open()
+				}
 				ctx.SetState(RoomState{MaxPlayers: req.MaxPlayers})
 				log.Printf("[Room] %s 创建 最大人数=%d", ctx.Id().String(), req.MaxPlayers)
 				return actor.OK, nil
@@ -291,14 +332,39 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 			actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *RoomInfo, _ bool) (*RoomInfoReply, error) {
 				return &RoomInfoReply{MaxPlayers: ctx.State().MaxPlayers}, nil
 			})
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *RoomCheckOwnership, _ bool) (actor.OkReply, error) {
+				selfID := mem.Self().ID
+				target, leave := cluster.CheckOwnership(placement, mem.Members(), selfID, "Room", ctx.Id().String())
+				if leave {
+					log.Printf("[迁移] Room %s 应迁移到 %s, 当前 MaxPlayers=%d",
+						ctx.Id().String(), target, ctx.State().MaxPlayers)
+				} else {
+					log.Printf("[迁移] Room %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
+				}
+				return actor.OK, nil
+			})
 		})
 	}
 	if nodeType == "chat-server" || nodeType == "all-in-one" {
 		actor.Serve(mgr, options100, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
-			actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *SendMessage, _ bool) (*SendMessageReply, error) {
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *SendMessage, spawning bool) (*SendMessageReply, error) {
+				if spawning {
+					ctx.Open()
+				}
 				ctx.State().Messages = append(ctx.State().Messages, req.Text)
 				log.Printf("[Chat] %s 消息: %s", ctx.Id().String(), req.Text)
 				return &SendMessageReply{Echo: req.Text}, nil
+			})
+			actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *ChatCheckOwnership, _ bool) (actor.OkReply, error) {
+				selfID := mem.Self().ID
+				target, leave := cluster.CheckOwnership(placement, mem.Members(), selfID, "Chat", ctx.Id().String())
+				if leave {
+					log.Printf("[迁移] Chat %s 应迁移到 %s, 消息数=%d",
+						ctx.Id().String(), target, len(ctx.State().Messages))
+				} else {
+					log.Printf("[迁移] Chat %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
+				}
+				return actor.OK, nil
 			})
 		})
 	}
@@ -328,51 +394,27 @@ func startNode(ctx context.Context, id, nodeType, addr string, seeds string) *Ro
 		server.Shutdown(context.Background())
 	}()
 
-	// 构建集群拓扑
-	self := cluster.Node{ID: id, Addr: addr, Type: nodeType}
-	members := []cluster.Node{self}
-	if seeds != "" {
-		for _, seed := range strings.Split(seeds, ",") {
-			seed = strings.TrimSpace(seed)
-			if seed == "" || seed == addr {
-				continue
-			}
-			seedType := inferTypeFromAddr(seed)
-			members = append(members, cluster.Node{
-				ID:   fmt.Sprintf("%s-%s", seedType, seed),
-				Addr: seed,
-				Type: seedType,
-			})
-		}
-	}
-
-	mem := newDynamicMembership(self, members...)
-	globalMembership = mem // 保存全局引用，供 migrate 命令使用
-	placement := cluster.NewConsistentHashPlacement(128).WithGroupMapping(groupMapping)
+	// 集群拓扑（membership / placement）已在 Serve 之前建好，这里只组装 Router。
 	router := cluster.NewRouter[JsonMsg, JsonC, JsonT](mem, placement, mgr)
 
 	// ─── 节点迁移支持 ───
 	// 初始化 MigrationCoordinator，监听集群拓扑变化
 	coord := cluster.NewMigrationCoordinator(mgr, placement, mem)
 
-	// 注册各 Actor Group 的 CheckOwnership handler 和通知回调
+	// CheckOwnership handler 已在 Serve 时一并注册，这里只挂“拓扑变化时广播”的通知。
 	if nodeType == "player-server" || nodeType == "all-in-one" {
-		// 延迟注册 CheckOwnership handler（需要在 Serve 之后）
-		registerPlayerMigrationHandlers(mgr, placement, mem)
 		coord.RegisterNotify(func() {
-			actor.Broadcast(mgr, &CheckOwnership{})
+			_, _ = actor.Broadcast(mgr, &CheckOwnership{})
 		})
 	}
 	if nodeType == "room-server" || nodeType == "all-in-one" {
-		registerRoomMigrationHandlers(mgr, placement, mem)
 		coord.RegisterNotify(func() {
-			actor.Broadcast(mgr, &RoomCheckOwnership{})
+			_, _ = actor.Broadcast(mgr, &RoomCheckOwnership{})
 		})
 	}
 	if nodeType == "chat-server" || nodeType == "all-in-one" {
-		registerChatMigrationHandlers(mgr, placement, mem)
 		coord.RegisterNotify(func() {
-			actor.Broadcast(mgr, &ChatCheckOwnership{})
+			_, _ = actor.Broadcast(mgr, &ChatCheckOwnership{})
 		})
 	}
 
@@ -483,71 +525,6 @@ func (d *dynamicMembership) RemoveNode(nodeID string) {
 		Node:  removed,
 		Nodes: newMembers,
 	}
-}
-
-// ─── 迁移 Handler 注册 ───
-
-var options0 = actor.Options{BufMails: 0}
-
-func registerPlayerMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
-	// 注册 CheckOwnership handler 到已存在的 Player group
-	// 注意：这里使用 Post + 空 ActorId 的方式无法直接注册到已有 group，
-	// 所以通过 serve 的方式，manager 内部会找到对应 group 并注册 handler。
-	// 实际上 Serve 已经在 startNode 中调用过了，这里需要额外的 handler 注册方式。
-	// 我们利用一个临时的 Actor 来触发 handler 查找：
-	// 实际上 RegisterServe 是通过 RegistryBuilder 调用的，这里改用直接方式。
-	// 因为 Serve 已经调用过了，我们需要在已有 group 上添加 handler。
-	// 最简单的方式是用一个新的 Serve 调用（会追加 handler 到已有 group）。
-	actor.Serve(mgr, options0, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-		actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *CheckOwnership, _ bool) (actor.OkReply, error) {
-			selfID := mem.Self().ID
-			members := mem.Members()
-			target, leave := cluster.CheckOwnership(placement, members, selfID, "Player", ctx.Id().String())
-			if leave {
-				log.Printf("[迁移] Player %s 应迁移到 %s, 当前 HP=%d Level=%d",
-					ctx.Id().String(), target, ctx.State().HP, ctx.State().Level)
-				// 实际场景中应调用 Deactivate 释放租约
-				// ctx.State().Deactivate()
-			} else {
-				log.Printf("[迁移] Player %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
-			}
-			return actor.OK, nil
-		})
-	})
-}
-
-func registerRoomMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
-	actor.Serve(mgr, options0, func(b *actor.RegistryBuilder[RoomId, RoomState]) {
-		actor.RegisterServe(b, func(ctx *actor.ActorContext[RoomId, RoomState], req *RoomCheckOwnership, _ bool) (actor.OkReply, error) {
-			selfID := mem.Self().ID
-			members := mem.Members()
-			target, leave := cluster.CheckOwnership(placement, members, selfID, "Room", ctx.Id().String())
-			if leave {
-				log.Printf("[迁移] Room %s 应迁移到 %s, 当前 MaxPlayers=%d",
-					ctx.Id().String(), target, ctx.State().MaxPlayers)
-			} else {
-				log.Printf("[迁移] Room %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
-			}
-			return actor.OK, nil
-		})
-	})
-}
-
-func registerChatMigrationHandlers(mgr *actor.Manager, placement cluster.PlacementStrategy, mem *dynamicMembership) {
-	actor.Serve(mgr, options0, func(b *actor.RegistryBuilder[ChatId, ChatState]) {
-		actor.RegisterServe(b, func(ctx *actor.ActorContext[ChatId, ChatState], req *ChatCheckOwnership, _ bool) (actor.OkReply, error) {
-			selfID := mem.Self().ID
-			members := mem.Members()
-			target, leave := cluster.CheckOwnership(placement, members, selfID, "Chat", ctx.Id().String())
-			if leave {
-				log.Printf("[迁移] Chat %s 应迁移到 %s, 消息数=%d",
-					ctx.Id().String(), target, len(ctx.State().Messages))
-			} else {
-				log.Printf("[迁移] Chat %s 仍属于当前节点 %s", ctx.Id().String(), selfID)
-			}
-			return actor.OK, nil
-		})
-	})
 }
 
 // ─── Banner ───

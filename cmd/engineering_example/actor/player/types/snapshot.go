@@ -24,8 +24,9 @@ type PlayerSnapshotter = grain.ShotSelf[PlayerState]
 //	    ctx.State().Deactivate(ctx) // 停用 + 释放租约
 //	}
 //
-// T 参数是 *ShotSelf[PlayerState]（指针类型），因为 ShotSelf 的方法是指针接收者。
-type GrainState = grain.State[PlayerId, PlayerState, PlayerState, *PlayerSnapshotter]
+// T 参数是值类型 ShotSelf[PlayerState]：ShotSelf 的方法都是值接收者，
+// 写成指针（*PlayerSnapshotter）时 Activate 阶段的 `var t T` 是 nil 指针，会直接 panic。
+type GrainState = grain.State[PlayerId, PlayerState, PlayerState, PlayerSnapshotter]
 
 // PlayerActorCtx 是 Player Actor 在 grain 模式下的 ActorContext 类型别名。
 type PlayerActorCtx = actor.ActorContext[PlayerId, GrainState]

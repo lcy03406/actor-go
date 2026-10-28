@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `cmd/readmegen`：把各包 `example_test.go` 中用 `// region:` 圈出的片段注入
+  `README.md` / `README.zh.md` 的 `<!-- example: name -->` 标记区。示例因此始终是编译
+  单元（`go test` 会编译 `example_test.go`），API 变更会让示例过时当场暴露；
+  `readmegen -check` 校验 README 是否最新（CI 已接入）。README 中游离的 ```go 代码块
+  会被拒绝，防止再长出无人校验的片段。
+- `cmd/shared_example`：共享数据容器的可运行示例（owner 发布 → 容器推送 → 读者
+  缓存命中 → `Fetch` 强一致读取）。
+
 ### Changed
 
+- 示例全面翻新：新增 `actor` / `shared` / `grain` / `rpc` 四个包的 `example_test.go`，
+  README 中的示例改为由上面的标记注入；新增 README 小节覆盖 `SetOnSpawn` 钩子与
+  `CtxValue`。
+- 修正三处过期示例：`actor.Serve(mgr, 100, ...)` 旧签名（现为 `actor.Options{BufMails}`）、
+  `ctx.Ref(roomId)` 跨 Group 引用（`ActorRef` 只能同 Group）、
+  `grain.State[..., *grain.ShotSelf[D]]`（`ShotSelf` 是值接收者，写指针会在 Activate 时
+  nil 指针 panic，须用值类型）。
+- 修正 `cmd/actor_example` / `cmd/rpc_example` / `cmd/cluster_example` 缺少 `ctx.Open()`
+  导致 Actor 处理完首条消息即被回收（后续 `Call` 报 `actor not found`）；
+  `cmd/cluster_example` 不再对同一 Group 二次 `Serve`（会 panic），迁移 handler 与业务
+  handler 在同一次 `Serve` 中注册。
 - 延后队列（postpone）不再只由发送方下一次发消息被动驱动：队列非空时武装 100ms
   的兜底 flush 定时器（`armPostponeFlush`），生命周期结束时（`clear()`，Quit 与回到
   空闲池共用）再 flush 一次并逐条 `Error` 告警仍未投出的消息。队列仍挂在
@@ -41,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 编译期类型安全：Request[A, R] 接口确保跨 Group 类型错误在编译期暴露
 - Content 超时：Call 支持 context 超时和取消
 - 完善的测试覆盖：单元测试、并发测试、Benchmark 测试
-- 示例代码：cmd/example（本地 Actor）、cmd/rpc_example（RPC）、cmd/grain_example（持久化 Grain）
+- 示例代码：cmd/actor_example（本地 Actor）、cmd/rpc_example（RPC）、cmd/grain_example（持久化 Grain）
 - OnSpawn 钩子：`RegistryBuilder.SetOnSpawn` 支持在 Actor 首次创建（spawn 消息）时、
   用户 spawn/serve handler 之前自动调用一次，用于初始化状态或资源
 

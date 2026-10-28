@@ -17,12 +17,16 @@
 go get github.com/lcy03406/actor-go
 
 # Run examples
-go run ./cmd/actor_example/   # local Actor
-go run ./cmd/rpc_example/    # RPC over WebSocket
-go run ./cmd/grain_example/  # persistent Grain
+go run ./cmd/actor_example/    # local Actor: spawn/Call/Post, OnSpawn, Timer, CtxValue, ActorRef
+go run ./cmd/rpc_example/      # RPC over WebSocket
+go run ./cmd/grain_example/    # persistent Grain (activate / persist / reload)
+go run ./cmd/shared_example/   # shared data container: publish → push → reader cache
 
 # Run tests
 go test ./...
+
+# Check that the README examples match the code (run after changing an example)
+go run ./cmd/readmegen -check
 ```
 
 ## Project Structure
@@ -33,8 +37,10 @@ actor-go/
 │   ├── actor_example/        # local Actor example
 │   ├── rpc_example/          # RPC over WebSocket example
 │   ├── grain_example/        # persistent Grain example
+│   ├── shared_example/       # shared data container example
 │   ├── cluster_example/      # cluster migration example
-│   └── engineering_example/  # throughput / stress examples
+│   ├── engineering_example/  # throughput / stress examples
+│   └── readmegen/            # injects example_test.go regions into the READMEs
 ├── actor/                    # Actor core
 │   ├── types.go              # ActorId, Request interfaces
 │   ├── actor.go              # actorRuntime — single-threaded event loop
@@ -211,10 +217,10 @@ handler for Actor X:
 - **Post constraint**: only `Request[A, OkReply]` can be used with `Post`; requests with custom replies must use `Call`.
 - **Cross-Group isolation**: requests for one Group cannot be sent to another — the compiler rejects it.
 
-```go
+```text
 // Compile error: Attack returns *AttackReply, cannot Post
 actor.Post(mgr, id, &Attack{Damage: 10})
-// → *Attack does not implement Request[PlayerId, OkReply]
+// -> *Attack does not implement Request[PlayerId, OkReply]
 
 // Correct: use Call to get the reply
 reply, err := actor.Call(ctx, mgr, id, &Attack{Damage: 10})
@@ -224,87 +230,93 @@ reply, err := actor.Call(ctx, mgr, id, &Attack{Damage: 10})
 
 ### 1. Define Types
 
+<!-- example: actor/types -->
 ```go
-import "github.com/lcy03406/actor-go/actor"
-
-// Actor ID
+// Actor ID：ActorType() 决定所属 Group，String() 用于日志与错误信息。
 type PlayerId struct {
-    ServerId int    `json:"serverId"`
-    OpenId   string `json:"openId"`
+	ServerId int    `json:"serverId"`
+	OpenId   string `json:"openId"`
 }
+
 func (id PlayerId) ActorType() actor.ActorType { return "Player" }
 func (id PlayerId) String() string {
-    return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId)
+	return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId)
 }
 
-// State
+// 状态：处理器直接读写，无需加锁。
 type PlayerState struct {
-    HP    int `json:"hp"`
-    Level int `json:"level"`
+	HP    int `json:"hp"`
+	Level int `json:"level"`
 }
 
-// Reply
+// 回复：Call 的返回类型。
 type AttackReply struct {
-    RemainingHP int  `json:"remainingHP"`
-    Alive       bool `json:"alive"`
+	RemainingHP int  `json:"remainingHP"`
+	Alive       bool `json:"alive"`
 }
 
-// SafeReply — reply that requires resource cleanup
-// Implements actor.SafeReply[*SafeAttackReply] (~*R0 + Close())
-type SafeAttackReply struct {
-    RemainingHP int  `json:"remainingHP"`
-    Alive       bool `json:"alive"`
-    // internal resources like connection handles, file descriptors, etc.
-}
-func (r *SafeAttackReply) Close() {
-    // release resources (e.g. return to connection pool, close file, etc.)
-}
-
-// Requests — implement Request[A, R]
+// 请求：实现 Request[A, R]，ReqType 把 Id 与 Reply 绑定，跨 Group 发送时编译期报错。
 type Login struct {
-    InitHP    int `json:"initHP"`
-    InitLevel int `json:"initLevel"`
+	InitHP    int `json:"initHP"`
+	InitLevel int `json:"initLevel"`
 }
+
 func (*Login) ReqType(_ PlayerId, _ actor.OkReply) string { return "Login" }
 
 type Attack struct {
-    Damage int `json:"damage"`
+	Damage int `json:"damage"`
 }
+
 func (*Attack) ReqType(_ PlayerId, _ *AttackReply) string { return "Attack" }
 
+type Heal struct {
+	Amount int `json:"amount"`
+}
+
+type HealReply struct {
+	NewHP int `json:"newHP"`
+}
+
+func (*Heal) ReqType(_ PlayerId, _ *HealReply) string { return "Heal" }
+
 type Close struct{}
+
 func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 ```
+<!-- /example: actor/types -->
 
 ### 2. Register Handlers
 
+<!-- example: actor/serve -->
 ```go
 mgr := actor.NewManager(slog.Default())
 
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-    // RegisterSpawn: first message creates the Actor (fire-and-forget)
-    actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
-        ctx.Open() // 框架不再在 spawn 时自动激活，需显式 Open 保持活跃
-        ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
-        return actor.OK, nil
-    })
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	// RegisterSpawn：首条消息创建 Actor（发后不理）
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+		ctx.Open() // spawn 时框架不会自动激活，需显式 Open 才能常驻
+		ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
+		return actor.OK, nil
+	})
 
-    // RegisterQuery: query an existing Actor (returns reply)
-    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
-        ctx.State().HP -= req.Damage
-        alive := ctx.State().HP > 0
-        return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
-    })
+	// RegisterQuery：只处理已存在的 Actor（返回回复）
+	actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
+		ctx.State().HP -= req.Damage
+		alive := ctx.State().HP > 0
+		return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
+	})
 
-    // RegisterServe: first message creates the Actor AND returns reply
-    actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, spawning bool) (*AttackReply, error) {
-        if spawning {
-            ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
-        }
-        return &AttackReply{RemainingHP: ctx.State().HP, Alive: ctx.State().HP > 0}, nil
-    })
+	// RegisterServe：首条消息创建 Actor，并且返回回复
+	actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Heal, spawning bool) (*HealReply, error) {
+		if spawning {
+			ctx.Open()
+		}
+		ctx.State().HP += req.Amount
+		return &HealReply{NewHP: ctx.State().HP}, nil
+	})
 })
 ```
+<!-- /example: actor/serve -->
 
 | Register | Spawn (create) | Query (existing) | Reply |
 |----------|:---:|:---:|:---:|
@@ -319,39 +331,28 @@ As an alternative to passing handler functions separately, request types can imp
 This keeps related logic together and reduces boilerplate — no need to write a
 separate closure for each registration.
 
+<!-- example: actor/request_handler -->
 ```go
-// RequestHandler combines Request + Handler into one type
-type Login struct {
-    InitHP    int `json:"initHP"`
-    InitLevel int `json:"initLevel"`
+type Logout struct{}
+
+func (*Logout) ReqType(_ PlayerId, _ actor.OkReply) string { return "Logout" }
+
+// Handle 包含处理逻辑 —— 无需在 Serve 中另写闭包。
+func (req *Logout) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], _ bool) (actor.OkReply, error) {
+	ctx.Quit()
+	return actor.OK, nil
 }
+```
+<!-- /example: actor/request_handler -->
 
-// ReqType identifies the request (same as Request interface)
-func (*Login) ReqType(_ PlayerId, _ actor.OkReply) string { return "Login" }
-
-// Handle contains the handler logic — no separate closure needed
-func (req *Login) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], spawning bool) (actor.OkReply, error) {
-    ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
-    return actor.OK, nil
-}
-
-type Attack struct {
-    Damage int `json:"damage"`
-}
-
-func (*Attack) ReqType(_ PlayerId, _ *AttackReply) string { return "Attack" }
-func (req *Attack) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], spawning bool) (*AttackReply, error) {
-    ctx.State().HP -= req.Damage
-    alive := ctx.State().HP > 0
-    return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
-}
-
-// Registration: pass only the type, no function argument
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-    actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
-    actor.RegisterQueryHandler[PlayerId, PlayerState, *Attack](b)
+<!-- example: actor/register_handler -->
+```go
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	// 请求类型自带 Handle：注册时只需给出类型，不必再传闭包
+	actor.RegisterSpawnHandler[PlayerId, PlayerState, *Logout](b)
 })
 ```
+<!-- /example: actor/register_handler -->
 
 **Handler registration variants:**
 
@@ -362,15 +363,15 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 
 **Comparison:**
 
-```go
-// Traditional: handler logic in closure
+```text
+// Traditional: handler logic in the closure
 actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
     ctx.SetState(PlayerState{HP: req.InitHP})
     return actor.OK, nil
 })
 
-// RequestHandler: handler logic on request type — one less function parameter
-actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
+// RequestHandler: handler logic lives on the request type - one less function parameter
+actor.RegisterSpawnHandler[PlayerId, PlayerState, *Logout](b)
 ```
 
 Both patterns are fully interoperable — you can mix `RegisterSpawn` and
@@ -385,16 +386,18 @@ the first time an Actor is created (i.e. on the first — spawn — message that
 existing Actor). It runs **before** your spawn/serve handler, on the same
 `ActorContext`, and is the ideal place to initialize state or acquire resources.
 
+<!-- example: actor/onspawn -->
 ```go
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-    b.SetOnSpawn(func(ctx *actor.ActorContext[PlayerId, PlayerState]) error {
-        // runs once, before the spawn handler
-        ctx.SetState(PlayerState{Health: 100})
-        return nil // return an error to abort creation
-    })
-    actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	b.SetOnSpawn(func(ctx *actor.ActorContext[PlayerId, PlayerState]) error {
+		// 首次创建时、spawn 处理器之前运行一次
+		ctx.SetState(PlayerState{HP: 100})
+		return nil // 返回 error 会中止创建，spawn 消息的调用方收到该错误
+	})
+	actor.RegisterSpawnHandler[PlayerId, PlayerState, *Logout](b)
 })
 ```
+<!-- /example: actor/onspawn -->
 
 **Behavior & contract:**
 
@@ -413,102 +416,136 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 
 ### 3. Send Messages
 
+<!-- example: actor/send -->
 ```go
+playerId := PlayerId{ServerId: 1, OpenId: "alice"}
 ctx := context.Background()
 
-// Post: fire-and-forget (spawns if needed)
-actor.Post(mgr, playerId, &Login{InitHP: 100, InitLevel: 1})
+// Post：发后不理（必要时按 spawn 语义创建 Actor）
+if err := actor.Post(mgr, playerId, &Login{InitHP: 100, InitLevel: 1}); err != nil {
+	slog.Error("post login failed", "err", err)
+}
 
-// Call: returns reply directly
+// Call：同步等待回复
 reply, err := actor.Call(ctx, mgr, playerId, &Attack{Damage: 30})
 if err != nil {
-    // handle error
+	slog.Error("call attack failed", "err", err)
 }
 fmt.Println(reply.RemainingHP) // 70
 
-// Call with timeout
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// 带超时的 Call
+timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 defer cancel()
-reply, err = actor.Call(ctx, mgr, playerId, &Attack{Damage: 10})
-
-// SafeCall: for replies that need explicit resource cleanup (e.g. connection handles)
-// Requires reply to implement SafeReply[R0] (~*R0 + Close())
-safeReply, err := actor.SafeCall(ctx, mgr, playerId, &Attack{Damage: 30})
+reply, err = actor.Call(timeoutCtx, mgr, playerId, &Attack{Damage: 10})
 if err != nil {
-    // handle error
+	slog.Error("call attack with timeout failed", "err", err)
 }
-defer safeReply.Close() // cleanup resources when done
-// If SafeCall times out or ctx is cancelled, Close() is called automatically
+fmt.Println(reply.RemainingHP) // 60
 
-// Broadcast: send to all Actors in the Group
-count, _ := actor.Broadcast(mgr, &Close{})
+// Broadcast：发给 Group 中的所有 Actor；Multicast：发给指定的一组 Actor
+_, _ = actor.Broadcast(mgr, &Close{})
+_, _ = actor.Multicast(mgr, []PlayerId{playerId}, &Close{})
 
-// Multicast: send to specific Actors
-hit, _ := actor.Multicast(mgr, []PlayerId{id1, id2}, &Close{})
-
-// Count: number of active Actors in a Group
+// Count / Finalize：统计活跃数量 / 关闭 Group 中所有 Actor 并等待
 n, _ := actor.Count[PlayerId](mgr)
-
-// Finalize: close all Actors in a Group and wait
+fmt.Println(n)
 actor.Finalize(mgr, &Close{})
 ```
+<!-- /example: actor/send -->
 
 ### 4. ActorContext Methods
 
+<!-- example: actor/context -->
 ```go
-actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
-    ctx.State()           // *PlayerState — no type assertion needed
-    ctx.SetState(...)     // replace state
-    ctx.Id()              // current ActorId
-    ctx.Logger()          // *slog.Logger
-    ctx.Context()         // context.Context (cancelled on Actor exit)
-    ctx.Quit()            // request exit (drain mailbox first)
-    ctx.Open()            // activate: leave idle state (opposite of Quit); spawn handlers must call this or Activate to keep the Actor alive
-    ctx.Ref(id)           // get a direct reference to another Actor (bypasses Group lookup)
-    ctx.Timer(d, fn)      // schedule delayed callback, returns timer ID
-    ctx.StopTimer(id)     // cancel a scheduled timer
-    return &AttackReply{}, nil
+teammate := PlayerId{ServerId: 1, OpenId: "bob"}
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
+		state := ctx.State()  // *PlayerState —— 无需类型断言
+		id := ctx.Id()        // 当前 ActorId
+		log := ctx.Logger()   // *slog.Logger
+		base := ctx.Context() // 随 Actor 退出而取消的 context
+
+		log.Info("attacked", "player", id, "hp", state.HP)
+
+		// 调度延迟回调（返回定时器 ID），以及取消它
+		timer := ctx.Timer("regen", time.Second, func() { state.HP++ })
+		ctx.StopTimer(timer)
+
+		// 下游调用用 ctx.Context()：Actor 退出时下游请求一并取消
+		if _, err := actor.Call(base, ctx.Manager(), teammate, &Heal{Amount: 1}); err != nil {
+			log.Warn("heal teammate failed", "err", err)
+		}
+
+		state.HP -= req.Damage
+		return &AttackReply{RemainingHP: state.HP, Alive: state.HP > 0}, nil
+	})
 })
 ```
+<!-- /example: actor/context -->
 
 ### 5. ActorRef — Direct Actor References
 
-When two Actor types have a clear correspondence (e.g. Player → Room, Order → User),
+When two Actors of the same group talk to each other frequently (e.g. two Players),
 `ActorRef` provides a direct reference that **bypasses Group lookup**, delivering
 messages straight to the target Actor's mailbox.
+Note: `ctx.Ref(id)` can only reference Actors of the **same Group** (same ActorId type).
 
 > **Key behavior**: `ActorRef` holds a reference count on the target Actor, preventing
 > it from exiting while idle. Call `Release()` when done to allow the target to exit.
 
+<!-- example: actor/ref_types -->
 ```go
-type RoomId struct {
-    RoomId string `json:"roomId"`
+type Follow struct {
+	Target PlayerId
 }
-func (id RoomId) ActorType() actor.ActorType { return "Room" }
-func (id RoomId) String() string { return "Room(" + id.RoomId + ")" }
 
-// In a Player handler, get a direct reference to the Player's Room:
-actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *JoinRoom, _ bool) (actor.OkReply, error) {
-    // ctx.Ref() looks up an existing Actor in the same Group — no spawn.
-    roomRef := ctx.Ref(req.RoomId)
-    if roomRef == nil {
-        return nil, ErrRoomNotFound // 未找到：返回业务错误，ErrRoomNotFound 仅为示例
-    }
-    defer roomRef.Release() // release hold, allow Room to idle-exit later
+func (*Follow) ReqType(_ PlayerId, _ actor.OkReply) string { return "Follow" }
 
-    // RefPost: fire-and-forget, bypasses Group lookup
-    if err := actor.RefPost(roomRef, &AddPlayer{PlayerId: ctx.Id()}); err != nil {
-        return nil, err
-    }
+// Ping 发给被引用的 Player（发后不理）。
+type Ping struct {
+	From PlayerId
+}
 
-    // RefCall: request-reply, bypasses Group lookup
-    info, err := actor.RefCall(context.Background(), roomRef, &GetRoomInfo{})
-    if err != nil {
-        return nil, err
-    }
-    return actor.OK, nil
+func (*Ping) ReqType(_ PlayerId, _ actor.OkReply) string { return "Ping" }
+
+// QueryHP 向被引用的 Player 查询血量（请求-回复）。
+type QueryHP struct{}
+
+type HPReply struct {
+	HP int `json:"hp"`
+}
+
+func (*QueryHP) ReqType(_ PlayerId, _ *HPReply) string { return "QueryHP" }
+```
+<!-- /example: actor/ref_types -->
+
+<!-- example: actor/ref -->
+```go
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Follow, _ bool) (actor.OkReply, error) {
+		// ctx.Ref 只在同一 Group 中查找已存在的 Actor —— 不会创建，找不到返回 nil
+		ref := ctx.Ref(req.Target)
+		if ref == nil {
+			return nil, ErrPlayerNotFound
+		}
+		defer ref.Release() // 释放持有，允许目标之后空闲退出
+
+		// RefPost：发后不理，绕过 Group 查找
+		if err := actor.RefPost(ref, &Ping{From: ctx.Id()}); err != nil {
+			return nil, err
+		}
+
+		// RefCall：请求-回复，绕过 Group 查找
+		hp, err := actor.RefCall(ctx.Context(), ref, &QueryHP{})
+		if err != nil {
+			return nil, err
+		}
+		ctx.Logger().Info("target hp", "target", ref.Id(), "hp", hp.HP)
+		return actor.OK, nil
+	})
 })
 ```
+<!-- /example: actor/ref -->
 
 **API Reference:**
 
@@ -535,7 +572,7 @@ Standard:   Post/Call → findHandler → findGroup → resolveActor → mailbox
 ActorRef:   RefPost/RefCall → mailbox  (no Group lookup, no resolveActor)
 ```
 
-### 5. SafeCall & SafeReply — Resource-Safe Replies
+### 6. SafeCall & SafeReply — Resource-Safe Replies
 
 When a handler returns a reply that holds external resources (database connections,
 file handles, network sockets, etc.), those resources must be released regardless of
@@ -549,35 +586,42 @@ whether the caller receives the reply. `SafeCall` guarantees this through the
 - On timeout/cancel: the framework automatically calls `Close()` on the orphaned reply
 - `SafeCall` / `RefSafeCall` mirrors `Call` / `RefCall` but with `SafeReply` constraint
 
+<!-- example: actor/safe_reply -->
 ```go
-// Define a SafeReply type
+// ResourceReply 持有外部资源，实现 SafeReply[ResourceReply]（~*R0 + Close()）。
 type ResourceReply struct {
-    Data   []byte
-    handle *os.File  // needs cleanup
+	Data   []byte
+	handle *os.File
 }
 
 func (r *ResourceReply) Close() {
-    if r.handle != nil {
-        r.handle.Close()
-    }
+	if r.handle != nil {
+		_ = r.handle.Close()
+	}
 }
 
-// Register handler returning SafeReply
-actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *LoadData, _ bool) (*ResourceReply, error) {
-    f, _ := os.Open("data.bin")
-    data, _ := io.ReadAll(f)
-    return &ResourceReply{Data: data, handle: f}, nil
-})
+type LoadData struct{}
 
-// Use SafeCall — Close() is guaranteed
-reply, err := actor.SafeCall(ctx, mgr, id, &LoadData{})
-if err != nil {
-    // If timeout/cancel: reply.Close() already called automatically
-    return err
-}
-defer reply.Close() // caller must close on success
-// use reply.Data...
+func (*LoadData) ReqType(_ PlayerId, _ *ResourceReply) string { return "LoadData" }
 ```
+<!-- /example: actor/safe_reply -->
+
+<!-- example: actor/safe_call -->
+```go
+// SafeCall：成功时调用方负责 Close，超时/取消时由框架兜底 Close。
+func loadData(ctx context.Context, mgr *actor.Manager, id PlayerId) error {
+	resource, err := actor.SafeCall(ctx, mgr, id, &LoadData{})
+	if err != nil {
+		// 超时或取消时框架已经调用过 resource 的 Close()
+		return err
+	}
+	defer resource.Close() // 成功时调用方负责清理
+
+	fmt.Println(len(resource.Data))
+	return nil
+}
+```
+<!-- /example: actor/safe_call -->
 
 | API | Constraint | Cleanup on success | Cleanup on timeout/cancel |
 |-----|-----------|-------------------|--------------------------|
@@ -590,23 +634,73 @@ defer reply.Close() // caller must close on success
 
 ### 7. Manager Lifecycle
 
+<!-- example: actor/manager -->
 ```go
-mgr := actor.NewManager(slog.Default())
-
-// Graceful shutdown: stop accepting new messages, wait for all Actors to exit
+// 优雅关闭：停止接收新消息，等待所有 Actor 退出
 mgr.CloseManager()
 mgr.JoinManager()
 
-// Check if Manager is already closed
+// 检查 Manager 是否已关闭
 if mgr.IsClosed() {
-    // ...
+	slog.Info("manager closed")
 }
 
-// Per-Actor lifecycle
-actor.CloseActor[PlayerId](mgr, id)   // gentle close: drain mailbox, finish in-flight
-actor.KillActor[PlayerId](mgr, id)    // force close: cancel ctx, drop pending
-actor.JoinActor[PlayerId](mgr, id)    // wait for Actor's goroutine to exit
+// 单 Actor 生命周期
+actor.CloseActor[PlayerId](mgr, playerId) // 温和关闭：排空邮箱，完成在途请求
+actor.KillActor[PlayerId](mgr, playerId)  // 强制关闭：取消 ctx，丢弃待处理
+actor.JoinActor[PlayerId](mgr, playerId)  // 等待 Actor 的 goroutine 退出
 ```
+<!-- /example: actor/manager -->
+
+### 8. CtxValue - Typed Manager Context Values
+
+`WithValue` mounts a typed value on the Manager's root context; every Actor created by
+that Manager can read it from `ctx.Context()`. Use it to deliver per-Manager
+infrastructure handles (ID allocators, clocks) to handlers instead of process-wide
+singletons - two Managers in one process each get their own instance.
+
+<!-- example: actor/ctx_value -->
+```go
+// 定义 per-Manager 的强类型 context 值：key 由句柄自带，写入与读取都在编译期检查类型，
+// 不需要手写私有 key struct 与类型断言。
+var SeqAllocValue = actor.DefineValue[*SeqAlloc]()
+
+// SeqAlloc 是挂在 Manager 上的基础设施句柄（如 ID 分配器）。
+type SeqAlloc struct{ n int }
+
+// Next 只在所属 Manager 的 actor 内调用，因此无需加锁。
+func (a *SeqAlloc) Next() int {
+	a.n++
+	return a.n
+}
+```
+<!-- /example: actor/ctx_value -->
+
+<!-- example: actor/ctx_value_use -->
+```go
+// 必须在任何 Serve 之前挂载：Group 创建时捕获当时的 Manager context，
+// 之后挂载的值对已注册的 Group 不可见（框架直接 panic，避免静默失效）。
+actor.WithValue(mgr, SeqAllocValue, &SeqAlloc{})
+
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+		alloc, ok := SeqAllocValue.Get(ctx.Context()) // 编译期已知类型，无需断言
+		if !ok {
+			return actor.OK, errors.New("seq alloc not mounted")
+		}
+		ctx.Open()
+		ctx.SetState(PlayerState{HP: req.InitHP, Level: alloc.Next()})
+		return actor.OK, nil
+	})
+})
+```
+<!-- /example: actor/ctx_value_use -->
+
+| API | Description |
+|-----|-------------|
+| `actor.DefineValue[T]()` | Define a per-Manager typed value handle. The key lives in the handle, so multiple definitions never collide. |
+| `actor.WithValue(mgr, v, value)` | Mount the value. **Must be called before any `Serve`**, otherwise it panics (so a value can never be silently invisible to registered Groups). |
+| `v.Get(ctx)` | Read the value as `(T, bool)`; returns the zero value and `false` when not mounted. |
 
 ## RPC
 
@@ -614,46 +708,58 @@ Remote Actor communication over WebSocket with JSON codec.
 
 ### Server
 
+<!-- example: rpc/server -->
 ```go
-mgr := actor.NewManager(slog.Default())
-// ... register handlers ...
-
 server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-    ":8080", mgr,
-    func(b *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec]) {
-        rpc.RegisterRequest(b, &Login{})
-        rpc.RegisterRequest(b, &Attack{})
-        rpc.RegisterRequest(b, &Close{})
-    },
+	":8080", mgr,
+	func(b *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec]) {
+		rpc.RegisterRequest(b, &DemoLogin{})
+		rpc.RegisterRequest(b, &DemoAttack{})
+		rpc.RegisterRequest(b, &DemoClose{})
+	},
 )
-server.Start() // non-blocking
-// server.Run() // blocking
+if err := server.Start(); err != nil { // 非阻塞；需要阻塞时改用 server.Run()
+	slog.Error("server start failed", "err", err)
+}
 
-// graceful shutdown
+// 优雅关闭：等待在途请求处理完
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-server.Shutdown(ctx)
+if err := server.Shutdown(ctx); err != nil {
+	slog.Error("server shutdown failed", "err", err)
+}
 ```
+<!-- /example: rpc/server -->
 
 ### Client
 
+<!-- example: rpc/client -->
 ```go
-client := rpc.NewClient[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport]("localhost:8080")
-client.Connect()
-defer client.Close()
+// 远程 Post（发后不理）
+if err := rpc.Post(client, playerId, &DemoLogin{InitHP: 100}); err != nil {
+	slog.Error("post login failed", "err", err)
+}
 
-// Remote Post (fire-and-forget)
-rpc.Post(client, playerId, &Login{InitHP: 100, InitLevel: 1})
+// 远程 Call
+reply, err := rpc.Call(ctx, client, playerId, &DemoAttack{Damage: 30})
+if err != nil {
+	slog.Error("call attack failed", "err", err)
+}
+slog.Info("attacked", "remainingHP", reply.RemainingHP)
 
-// Remote Call
-reply, err := rpc.Call(ctx, client, playerId, &Attack{Damage: 30})
+// 带超时的远程 Call
+reply, err = rpc.CallTimeout(ctx, client, playerId, &DemoAttack{Damage: 10}, 5*time.Second)
+if err != nil {
+	slog.Error("call attack with timeout failed", "err", err)
+}
+slog.Info("attacked", "remainingHP", reply.RemainingHP)
 
-// Remote Call with timeout
-reply, err = rpc.CallTimeout(ctx, client, playerId, &Attack{Damage: 10}, 5*time.Second)
-
-// Remote Broadcast
-rpc.Broadcast(client, &Close{})
+// 远程 Broadcast
+if err := rpc.Broadcast(client, &DemoClose{}); err != nil {
+	slog.Error("broadcast failed", "err", err)
+}
 ```
+<!-- /example: rpc/client -->
 
 ### Wire Format
 
@@ -685,63 +791,52 @@ Actors are **not** activated automatically before handling the spawn message. Yo
 
 ### Quick Example
 
+<!-- example: grain/setup -->
 ```go
-import (
-    "github.com/lcy03406/actor-go/actor"
-    "github.com/lcy03406/actor-go/grain"
-)
-
-// Use ShotSelf when business data is directly serializable
-type PlayerData struct {
-    HP    int `json:"hp"`
-    Level int `json:"level"`
-}
-
-// State type alias for readability
-type GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
-
-// Create PersistenceManager: lease is built into the driver, no separate lease manager needed
+// PersistenceManager 聚合 driver + 租约；租约内建于 driver，无需单独的租约管理器。
 pm := grain.NewPersistenceManager(
-    grain.WithDriver(grain.NewJsonDriver("./data")),
-    grain.WithNodeId("node-1"),
+	grain.WithDriver(grain.NewJsonDriver("./grain_data")),
+	grain.WithNodeId("node-1"),
+	grain.WithAutoPersistInterval(5*time.Second),
 )
 
-// Register: spawn handler explicitly activates the Grain
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
-    actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Login, _ bool) (actor.OkReply, error) {
-        res, err := ctx.State().Activate(ctx, pm)
-        if err != nil {
-            return actor.OK, err
-        }
-        if res == grain.ActivateCreated { // 首次创建才初始化
-            ctx.State().Data.HP = req.InitHP
-            ctx.State().Data.Level = req.InitLevel
-        }
-        ctx.State().Persist(ctx)  // save immediately
-        return actor.OK, nil
-    })
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
+	// 生命周期托管给框架：OnSpawn 自动 Activate + 定时存盘，退出时自动 Persist + 释放租约。
+	grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+		if created { // 仅首次创建时初始化业务数据
+			ctx.State().Data.HP = 100
+			ctx.State().Data.Level = 1
+		}
+		return nil
+	})
 
-    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Attack, _ bool) (*AttackReply, error) {
-        ctx.State().Data.HP -= req.Damage
-        alive := ctx.State().Data.HP > 0
-        return &AttackReply{RemainingHP: ctx.State().Data.HP, Alive: alive}, nil
-    })
+	// 业务 handler 只关心业务：不再手动 Activate / Persist / Deactivate。
+	actor.RegisterSpawn(b, func(ctx *GrainCtx, req *Login, _ bool) (actor.OkReply, error) {
+		ctx.State().Data.HP = req.InitHP
+		return actor.OK, nil
+	})
 
-    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *SaveAndQuit, _ bool) (actor.OkReply, error) {
-        ctx.State().Deactivate(ctx)  // save + release lease + quit
-        return actor.OK, nil
-    })
+	actor.RegisterQuery(b, func(ctx *GrainCtx, req *Attack, _ bool) (*AttackReply, error) {
+		ctx.State().Data.HP -= req.Damage
+		return &AttackReply{RemainingHP: ctx.State().Data.HP}, nil
+	})
 })
 ```
+<!-- /example: grain/setup -->
 
 ### Grain State Methods
 
+<!-- example: grain/state -->
 ```go
 state := ctx.State()
-state.Data           // your business data (D)
-state.Persist(ctx)   // save now, keep running (also renews the lease TTL)
-state.Deactivate(ctx)  // save + release lease + quit
+ctx.Logger().Info("hp", "hp", state.Data.HP) // Data：业务数据（D）
+
+if err := state.Persist(ctx); err != nil { // 立即存盘并续租，Actor 继续运行
+	return actor.OK, err
+}
+state.Deactivate(ctx) // 存盘 + 释放租约 + 退出
 ```
+<!-- /example: grain/state -->
 
 ### Lifecycle
 
@@ -808,28 +903,60 @@ Three roles:
 - **Reader**: embeds `shared.Reader` in its State; `Watch` subscribes on first use and
   then serves from the local cache updated by pushes.
 
+<!-- example: shared/keys -->
 ```go
-// ── Define keys (value type bound at compile time; pattern is globally unique; may contain placeholders) ──
+// 定义 key：值类型在编译期与 key 绑定，pattern 全局唯一，可带占位符。
 var (
-    WorldSeed  = shared.Define[int64]("world/%s/seed", shared.Immutable())
-    FamilyTech = shared.Define[TechState]("family/%s/tech",
-        shared.WithCooldown(50*time.Millisecond), shared.WithTTL(30*time.Second))
+	WorldSeed  = shared.Define[int64]("world/%s/seed", shared.Immutable())
+	FamilyTech = shared.Define[TechState]("family/%s/tech",
+		shared.WithCooldown(50*time.Millisecond), shared.WithTTL(30*time.Second))
 )
+```
+<!-- /example: shared/keys -->
 
-// ── Startup: register the container Group (shard count must be consistent process-wide) ──
+<!-- example: shared/usage -->
+```go
+// 启动：注册容器 Group（分片数在进程内必须一致，重复 Serve 会 panic）
 shared.Serve(mgr, shared.Options{Shards: 4, Cooldown: 50 * time.Millisecond})
 
-// ── Owner publishes (authoritative data stays in the owner; the container only distributes) ──
-shared.Publish(ctx, WorldSeed.Of(worldID), s.Seed)
-
-// ── Reader: register once per Group, then subscribe to any key ──
-type RegionState struct{ Vars shared.Reader }
-actor.Serve(mgr, opts, func(b *actor.RegistryBuilder[RegionId, RegionState]) {
-    shared.ServeReader(b, func(s *RegionState) *shared.Reader { return &s.Vars })
+// owner：权威数据仍在自己手里，变更时 Publish，容器只负责分发
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[WorldId, WorldState]) {
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[WorldId, WorldState], req *InitWorld, _ bool) (actor.OkReply, error) {
+		ctx.Open()
+		ctx.State().Seed = req.Seed
+		return actor.OK, shared.Publish(ctx, WorldSeed.Of(ctx.Id()), ctx.State().Seed)
+	})
 })
-seed, err := shared.Watch(ctx, &s.Vars, WorldSeed.Of(worldID)) // subscribe + local cache
-seed, err := shared.Fetch(ctx, WorldSeed.Of(worldID))          // strongly consistent read (no subscription)
+
+// 读者：Group 只需注册一次 ServeReader，之后可 Watch 任意 key
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[RegionId, RegionState]) {
+	shared.ServeReader(b, func(s *RegionState) *shared.Reader { return &s.Vars })
+
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[RegionId, RegionState], req *EnterRegion, _ bool) (actor.OkReply, error) {
+		ctx.Open()
+
+		// 首次 Watch 订阅并取回快照，之后命中本地缓存（由容器推送更新）
+		seed, err := shared.Watch(ctx, &ctx.State().Vars, WorldSeed.Of(req.World))
+		if err != nil {
+			return actor.OK, err
+		}
+		ctx.State().Seed = seed
+
+		// 需要"必须最新"的读取用 Fetch：每次触网、不订阅、不写缓存
+		latest, err := shared.Fetch(ctx, WorldSeed.Of(req.World))
+		if err != nil {
+			return actor.OK, err
+		}
+		ctx.Logger().Info("joined", "seed", latest)
+		return actor.OK, nil
+	})
+})
+
+// 业务侧：先由 owner 发布，再让读者订阅
+_ = actor.Post(mgr, worldID, &InitWorld{Seed: 42})
+_ = actor.Post(mgr, regionID, &EnterRegion{World: worldID})
 ```
+<!-- /example: shared/usage -->
 
 **Consistency semantics (eventual)**
 
@@ -856,6 +983,7 @@ seed, err := shared.Fetch(ctx, WorldSeed.Of(worldID))          // strongly consi
 | Compile-time safety | `Request[A, R]` binds Id/Reply; cross-Group errors caught by compiler |
 | Post constraint | `Request[A, OkReply]` only; custom replies must use `Call` |
 | Auto-spawn | First message triggers Actor creation (RegisterSpawn / RegisterServe) |
+| Explicit Open | A spawned Actor idles out unless the handler calls `ctx.Open()` (or `State.Activate` for Grain) |
 | Drain | Mailbox is drained before close; no messages lost |
 | Context timeout | `Call(ctx, ...)` supports timeout and cancellation |
 | Cancellable Timer | `ctx.Timer()` returns timer ID, `ctx.StopTimer(id)` cancels |

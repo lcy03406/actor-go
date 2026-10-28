@@ -7,21 +7,23 @@ import (
 // ActorRef 是 Actor 之间的直连引用，绕过 Group 查找。
 // 持有目标 Actor 的引用计数，阻止其 idle 退出。
 //
-// 适用于两类 Actor 有明确对应关系的场景（如 Player→Room, Order→User）。
+// 适用于同组 Actor 之间频繁互发的场景（如两个 Player 互相关注）。
+// 注意：ctx.Ref 只能引用与当前 Actor 同一个 Group（相同 ActorId 类型）的 Actor，
+// 跨组引用请照常使用 Post / Call。
 // 消息直接投递到目标 Actor 的 mailbox，无需经过 Manager→Group→handler 的查找链路。
 //
 // 用法：
 //
-//	// 在 handler 中获取对另一个 Actor 的引用
-//	ref := ctx.Ref(roomId)
+//	// 在 handler 中获取对同组另一个 Actor 的引用
+//	ref := ctx.Ref(targetId)
 //	if ref == nil {
-//	    // 未找到：返回用户的业务错误（此处 ErrRoomNotFound 仅为示例）
-//	    return nil, ErrRoomNotFound
+//	    // 未找到（不会创建）：返回业务错误（此处 ErrTargetNotFound 仅为示例）
+//	    return nil, ErrTargetNotFound
 //	}
 //	defer ref.Release() // 用完后释放，允许目标 idle 退出
 //
-//	err := actor.RefPost(ref, &JoinRoom{PlayerId: ctx.Id()})
-//	reply, err := actor.RefCall(ctx, ref, &GetRoomInfo{})
+//	err := RefPost(ref, &Notify{From: ctx.Id()})
+//	reply, err := RefCall(ctx.Context(), ref, &QueryHP{})
 type ActorRef[A ActorId, S anyState] struct {
 	target *actorRuntime[A, S]
 	mgr    *Manager

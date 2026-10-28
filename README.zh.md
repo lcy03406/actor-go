@@ -15,12 +15,16 @@
 go get github.com/lcy03406/actor-go
 
 # 运行示例
-go run ./cmd/actor_example/   # 本地 Actor
-go run ./cmd/rpc_example/    # 基于 WebSocket 的 RPC
-go run ./cmd/grain_example/  # 持久化 Grain
+go run ./cmd/actor_example/    # 本地 Actor：spawn/Call/Post、OnSpawn、Timer、CtxValue、ActorRef
+go run ./cmd/rpc_example/      # 基于 WebSocket 的 RPC
+go run ./cmd/grain_example/    # 持久化 Grain（激活 / 存盘 / 重新加载）
+go run ./cmd/shared_example/   # 共享数据容器：发布 → 推送 → 读者缓存
 
 # 运行测试
 go test ./...
+
+# 校验 README 里的示例与代码一致（改过示例后跑）
+go run ./cmd/readmegen -check
 ```
 
 ## 项目结构
@@ -31,8 +35,10 @@ actor-go/
 │   ├── actor_example/        # 本地 Actor 示例
 │   ├── rpc_example/          # 基于 WebSocket 的 RPC 示例
 │   ├── grain_example/        # 持久化 Grain 示例
+│   ├── shared_example/       # 共享数据容器示例
 │   ├── cluster_example/      # 集群迁移示例
-│   └── engineering_example/  # 吞吐量 / 压测示例
+│   ├── engineering_example/  # 吞吐量 / 压测示例
+│   └── readmegen/            # 把 example_test.go 的 region 注入 README
 ├── actor/                    # Actor 核心
 │   ├── types.go              # ActorId、Request 接口
 │   ├── actor.go              # actorRuntime —— 单线程事件循环
@@ -199,12 +205,12 @@ Actor X 的处理器：
 - **Post 约束**：只有 `Request[A, OkReply]` 才能用于 `Post`；带自定义回复的请求必须使用 `Call`。
 - **跨 Group 隔离**：某 Group 的请求无法发送给另一个 Group —— 由编译器直接拒绝。
 
-```go
+```text
 // 编译错误：Attack 返回 *AttackReply，不能 Post
 actor.Post(mgr, id, &Attack{Damage: 10})
 // → *Attack does not implement Request[PlayerId, OkReply]
 
-// 正确：使用 Call 获取回复
+// 正确：用 Call 取回复
 reply, err := actor.Call(ctx, mgr, id, &Attack{Damage: 10})
 ```
 
@@ -212,87 +218,93 @@ reply, err := actor.Call(ctx, mgr, id, &Attack{Damage: 10})
 
 ### 1. 定义类型
 
+<!-- example: actor/types -->
 ```go
-import "github.com/lcy03406/actor-go/actor"
-
-// Actor ID
+// Actor ID：ActorType() 决定所属 Group，String() 用于日志与错误信息。
 type PlayerId struct {
-    ServerId int    `json:"serverId"`
-    OpenId   string `json:"openId"`
+	ServerId int    `json:"serverId"`
+	OpenId   string `json:"openId"`
 }
+
 func (id PlayerId) ActorType() actor.ActorType { return "Player" }
 func (id PlayerId) String() string {
-    return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId)
+	return fmt.Sprintf("Player(%d,%s)", id.ServerId, id.OpenId)
 }
 
-// 状态
+// 状态：处理器直接读写，无需加锁。
 type PlayerState struct {
-    HP    int `json:"hp"`
-    Level int `json:"level"`
+	HP    int `json:"hp"`
+	Level int `json:"level"`
 }
 
-// 回复
+// 回复：Call 的返回类型。
 type AttackReply struct {
-    RemainingHP int  `json:"remainingHP"`
-    Alive       bool `json:"alive"`
+	RemainingHP int  `json:"remainingHP"`
+	Alive       bool `json:"alive"`
 }
 
-// SafeReply —— 需要资源清理的回复
-// 实现 actor.SafeReply[*SafeAttackReply]（~*R0 + Close()）
-type SafeAttackReply struct {
-    RemainingHP int  `json:"remainingHP"`
-    Alive       bool `json:"alive"`
-    // 内部资源，如连接句柄、文件描述符等
-}
-func (r *SafeAttackReply) Close() {
-    // 释放资源（例如归还到连接池、关闭文件等）
-}
-
-// 请求 —— 实现 Request[A, R]
+// 请求：实现 Request[A, R]，ReqType 把 Id 与 Reply 绑定，跨 Group 发送时编译期报错。
 type Login struct {
-    InitHP    int `json:"initHP"`
-    InitLevel int `json:"initLevel"`
+	InitHP    int `json:"initHP"`
+	InitLevel int `json:"initLevel"`
 }
+
 func (*Login) ReqType(_ PlayerId, _ actor.OkReply) string { return "Login" }
 
 type Attack struct {
-    Damage int `json:"damage"`
+	Damage int `json:"damage"`
 }
+
 func (*Attack) ReqType(_ PlayerId, _ *AttackReply) string { return "Attack" }
 
+type Heal struct {
+	Amount int `json:"amount"`
+}
+
+type HealReply struct {
+	NewHP int `json:"newHP"`
+}
+
+func (*Heal) ReqType(_ PlayerId, _ *HealReply) string { return "Heal" }
+
 type Close struct{}
+
 func (*Close) ReqType(_ PlayerId, _ actor.OkReply) string { return "Close" }
 ```
+<!-- /example: actor/types -->
 
 ### 2. 注册处理器
 
+<!-- example: actor/serve -->
 ```go
 mgr := actor.NewManager(slog.Default())
 
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-    // RegisterSpawn：首条消息创建 Actor（发后不理）
-    actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
-        ctx.Open() // 框架不再在 spawn 时自动激活，需显式 Open 保持活跃
-        ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
-        return actor.OK, nil
-    })
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	// RegisterSpawn：首条消息创建 Actor（发后不理）
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+		ctx.Open() // spawn 时框架不会自动激活，需显式 Open 才能常驻
+		ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
+		return actor.OK, nil
+	})
 
-    // RegisterQuery：查询已有 Actor（返回回复）
-    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
-        ctx.State().HP -= req.Damage
-        alive := ctx.State().HP > 0
-        return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
-    })
+	// RegisterQuery：只处理已存在的 Actor（返回回复）
+	actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
+		ctx.State().HP -= req.Damage
+		alive := ctx.State().HP > 0
+		return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
+	})
 
-    // RegisterServe：首条消息创建 Actor 且返回回复
-    actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, spawning bool) (*AttackReply, error) {
-        if spawning {
-            ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
-        }
-        return &AttackReply{RemainingHP: ctx.State().HP, Alive: ctx.State().HP > 0}, nil
-    })
+	// RegisterServe：首条消息创建 Actor，并且返回回复
+	actor.RegisterServe(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Heal, spawning bool) (*HealReply, error) {
+		if spawning {
+			ctx.Open()
+		}
+		ctx.State().HP += req.Amount
+		return &HealReply{NewHP: ctx.State().HP}, nil
+	})
 })
 ```
+<!-- /example: actor/serve -->
 
 | 注册 | Spawn（创建） | Query（已有） | 回复 |
 |------|:---:|:---:|:---:|
@@ -305,39 +317,28 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 除了单独传入处理函数，请求类型也可以实现 `RequestHandler`，将处理逻辑直接绑定在请求结构体上。
 这样可以把相关逻辑聚合在一起，减少样板代码 —— 无需为每个注册编写单独闭包。
 
+<!-- example: actor/request_handler -->
 ```go
-// RequestHandler 将 Request + Handler 组合为一个类型
-type Login struct {
-    InitHP    int `json:"initHP"`
-    InitLevel int `json:"initLevel"`
+type Logout struct{}
+
+func (*Logout) ReqType(_ PlayerId, _ actor.OkReply) string { return "Logout" }
+
+// Handle 包含处理逻辑 —— 无需在 Serve 中另写闭包。
+func (req *Logout) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], _ bool) (actor.OkReply, error) {
+	ctx.Quit()
+	return actor.OK, nil
 }
+```
+<!-- /example: actor/request_handler -->
 
-// ReqType 标识请求（与 Request 接口一致）
-func (*Login) ReqType(_ PlayerId, _ actor.OkReply) string { return "Login" }
-
-// Handle 包含处理逻辑 —— 无需单独闭包
-func (req *Login) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], spawning bool) (actor.OkReply, error) {
-    ctx.SetState(PlayerState{HP: req.InitHP, Level: req.InitLevel})
-    return actor.OK, nil
-}
-
-type Attack struct {
-    Damage int `json:"damage"`
-}
-
-func (*Attack) ReqType(_ PlayerId, _ *AttackReply) string { return "Attack" }
-func (req *Attack) Handle(ctx *actor.ActorContext[PlayerId, PlayerState], spawning bool) (*AttackReply, error) {
-    ctx.State().HP -= req.Damage
-    alive := ctx.State().HP > 0
-    return &AttackReply{RemainingHP: ctx.State().HP, Alive: alive}, nil
-}
-
-// 注册：仅传入类型，无需函数参数
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
-    actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
-    actor.RegisterQueryHandler[PlayerId, PlayerState, *Attack](b)
+<!-- example: actor/register_handler -->
+```go
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	// 请求类型自带 Handle：注册时只需给出类型，不必再传闭包
+	actor.RegisterSpawnHandler[PlayerId, PlayerState, *Logout](b)
 })
 ```
+<!-- /example: actor/register_handler -->
 
 **处理器注册变体：**
 
@@ -348,117 +349,182 @@ actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
 
 **对比：**
 
-```go
-// 传统方式：处理逻辑写在闭包中
+```text
+// 传统方式：处理逻辑写在闭包里
 actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
     ctx.SetState(PlayerState{HP: req.InitHP})
     return actor.OK, nil
 })
 
 // RequestHandler：处理逻辑在请求类型上 —— 少一个函数参数
-actor.RegisterSpawnHandler[PlayerId, PlayerState, *Login](b)
+actor.RegisterSpawnHandler[PlayerId, PlayerState, *Logout](b)
 ```
 
 两种模式完全互通 —— 你可以在同一个 `RegistryBuilder` 中混用 `RegisterSpawn` 和
 `RegisterSpawnHandler`。选择依据是处理逻辑放在请求结构体上更自然，还是和其他处理器放在注册块中更自然。
 
+
+### 2.1 OnSpawn 钩子 —— 首次创建时初始化
+
+`SetOnSpawn` 注册的钩子由框架在 Actor **首次创建**（即第一条触发 spawn 的消息）时
+**自动调用且只调用一次**：它运行在你的 spawn/serve 处理器**之前**，拿到同一个
+`ActorContext`，适合初始化状态或申请资源。
+
+<!-- example: actor/onspawn -->
+```go
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	b.SetOnSpawn(func(ctx *actor.ActorContext[PlayerId, PlayerState]) error {
+		// 首次创建时、spawn 处理器之前运行一次
+		ctx.SetState(PlayerState{HP: 100})
+		return nil // 返回 error 会中止创建，spawn 消息的调用方收到该错误
+	})
+	actor.RegisterSpawnHandler[PlayerId, PlayerState, *Logout](b)
+})
+```
+<!-- /example: actor/onspawn -->
+
+| 方面 | 说明 |
+|------|------|
+| **时机** | 仅在 `spawning == true`（Actor 原本不存在）时调用；后续消息不会再触发。 |
+| **顺序** | 在用户的 spawn/serve 处理器之前运行，共享同一个 `ActorContext`。 |
+| **调用时状态** | Actor 尚未活跃（idle）。可以 `SetState`；在 `OnSpawn` 内调用 `ctx.Open()` 会让 Actor 保持存活，即使 spawn 处理器本身没有 Open。 |
+| **返回值** | 返回 `nil` 则继续创建并执行 spawn 处理器；返回非 nil error 则中止创建：Actor **不会**被创建，spawn 消息的调用方收到该错误，下次 spawn 时重试。 |
+| **不要手动调用** | `OnSpawn` 由框架管理，永远不要自己调用。 |
+
+> **错误传播**：`OnSpawn` 返回错误时，spawn 消息的调用方会收到它（经 `Call` / `Post` 的回复通道）。
+> `Post` 在入队成功后立即返回 `nil`，因此要观察失败请用 `Call`（或检查 `actor.Count`）。
+
 ### 3. 发送消息
 
+<!-- example: actor/send -->
 ```go
+playerId := PlayerId{ServerId: 1, OpenId: "alice"}
 ctx := context.Background()
 
-// Post：发后不理（必要时自动创建）
-actor.Post(mgr, playerId, &Login{InitHP: 100, InitLevel: 1})
+// Post：发后不理（必要时按 spawn 语义创建 Actor）
+if err := actor.Post(mgr, playerId, &Login{InitHP: 100, InitLevel: 1}); err != nil {
+	slog.Error("post login failed", "err", err)
+}
 
-// Call：直接返回回复
+// Call：同步等待回复
 reply, err := actor.Call(ctx, mgr, playerId, &Attack{Damage: 30})
 if err != nil {
-    // 处理错误
+	slog.Error("call attack failed", "err", err)
 }
 fmt.Println(reply.RemainingHP) // 70
 
 // 带超时的 Call
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 defer cancel()
-reply, err = actor.Call(ctx, mgr, playerId, &Attack{Damage: 10})
-
-// SafeCall：用于需要显式资源清理的回复（例如连接句柄）
-// 要求回复实现 SafeReply[R0]（~*R0 + Close()）
-safeReply, err := actor.SafeCall(ctx, mgr, playerId, &Attack{Damage: 30})
+reply, err = actor.Call(timeoutCtx, mgr, playerId, &Attack{Damage: 10})
 if err != nil {
-    // 处理错误
+	slog.Error("call attack with timeout failed", "err", err)
 }
-defer safeReply.Close() // 用完后清理资源
-// 若 SafeCall 超时或 ctx 被取消，Close() 会被自动调用
+fmt.Println(reply.RemainingHP) // 60
 
-// Broadcast：发送给 Group 中所有 Actor
-count, _ := actor.Broadcast(mgr, &Close{})
+// Broadcast：发给 Group 中的所有 Actor；Multicast：发给指定的一组 Actor
+_, _ = actor.Broadcast(mgr, &Close{})
+_, _ = actor.Multicast(mgr, []PlayerId{playerId}, &Close{})
 
-// Multicast：发送给指定 Actor
-hit, _ := actor.Multicast(mgr, []PlayerId{id1, id2}, &Close{})
-
-// Count：Group 中活跃 Actor 数量
+// Count / Finalize：统计活跃数量 / 关闭 Group 中所有 Actor 并等待
 n, _ := actor.Count[PlayerId](mgr)
-
-// Finalize：关闭 Group 中所有 Actor 并等待
+fmt.Println(n)
 actor.Finalize(mgr, &Close{})
 ```
+<!-- /example: actor/send -->
 
 ### 4. ActorContext 方法
 
+<!-- example: actor/context -->
 ```go
-actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
-    ctx.State()           // *PlayerState —— 无需类型断言
-    ctx.SetState(...)     // 替换状态
-    ctx.Id()              // 当前 ActorId
-    ctx.Logger()          // *slog.Logger
-    ctx.Context()         // context.Context（Actor 退出时取消）
-    ctx.Quit()            // 请求退出（先排空邮箱）
-    ctx.Open()            // 激活：离开空闲态（与 Quit 相反）；spawn 处理器必须调用它或 Activate 以保持 Actor 存活
-    ctx.Ref(id)           // 获取另一个 Actor 的直接引用（绕过 Group 查找）
-    ctx.Timer(d, fn)      // 调度延迟回调，返回定时器 ID
-    ctx.StopTimer(id)     // 取消已调度的定时器
-    return &AttackReply{}, nil
+teammate := PlayerId{ServerId: 1, OpenId: "bob"}
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Attack, _ bool) (*AttackReply, error) {
+		state := ctx.State()  // *PlayerState —— 无需类型断言
+		id := ctx.Id()        // 当前 ActorId
+		log := ctx.Logger()   // *slog.Logger
+		base := ctx.Context() // 随 Actor 退出而取消的 context
+
+		log.Info("attacked", "player", id, "hp", state.HP)
+
+		// 调度延迟回调（返回定时器 ID），以及取消它
+		timer := ctx.Timer("regen", time.Second, func() { state.HP++ })
+		ctx.StopTimer(timer)
+
+		// 下游调用用 ctx.Context()：Actor 退出时下游请求一并取消
+		if _, err := actor.Call(base, ctx.Manager(), teammate, &Heal{Amount: 1}); err != nil {
+			log.Warn("heal teammate failed", "err", err)
+		}
+
+		state.HP -= req.Damage
+		return &AttackReply{RemainingHP: state.HP, Alive: state.HP > 0}, nil
+	})
 })
 ```
+<!-- /example: actor/context -->
 
 ### 5. ActorRef —— 直接 Actor 引用
 
-当两种 Actor 类型存在明确对应关系时（例如 Player → Room、Order → User），
+当两个 Actor 频繁互相发消息时（例如同组内的两个 Player 互相关注），
 `ActorRef` 提供一种**绕过 Group 查找**的直接引用，将消息直接投递到目标 Actor 的邮箱。
+注意：`ctx.Ref(id)` 只能引用**同一个 Group**（同一个 ActorId 类型）内的 Actor。
 
 > **关键行为**：`ActorRef` 会对目标 Actor 持有引用计数，阻止其在空闲时退出。
 > 使用完毕后请调用 `Release()`，允许目标退出。
 
+<!-- example: actor/ref_types -->
 ```go
-type RoomId struct {
-    RoomId string `json:"roomId"`
+type Follow struct {
+	Target PlayerId
 }
-func (id RoomId) ActorType() actor.ActorType { return "Room" }
-func (id RoomId) String() string { return "Room(" + id.RoomId + ")" }
 
-// 在 Player 处理器中，获取 Player 所在 Room 的直接引用：
-actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *JoinRoom, _ bool) (actor.OkReply, error) {
-    // ctx.Ref() 在同 Group 中查找已有 Actor —— 不创建。
-    roomRef := ctx.Ref(req.RoomId)
-    if roomRef == nil {
-        return nil, ErrRoomNotFound // 未找到：返回业务错误，ErrRoomNotFound 仅为示例
-    }
-    defer roomRef.Release() // 释放持有，允许 Room 之后空闲退出
+func (*Follow) ReqType(_ PlayerId, _ actor.OkReply) string { return "Follow" }
 
-    // RefPost：发后不理，绕过 Group 查找
-    if err := actor.RefPost(roomRef, &AddPlayer{PlayerId: ctx.Id()}); err != nil {
-        return nil, err
-    }
+// Ping 发给被引用的 Player（发后不理）。
+type Ping struct {
+	From PlayerId
+}
 
-    // RefCall：请求-回复，绕过 Group 查找
-    info, err := actor.RefCall(context.Background(), roomRef, &GetRoomInfo{})
-    if err != nil {
-        return nil, err
-    }
-    return actor.OK, nil
+func (*Ping) ReqType(_ PlayerId, _ actor.OkReply) string { return "Ping" }
+
+// QueryHP 向被引用的 Player 查询血量（请求-回复）。
+type QueryHP struct{}
+
+type HPReply struct {
+	HP int `json:"hp"`
+}
+
+func (*QueryHP) ReqType(_ PlayerId, _ *HPReply) string { return "QueryHP" }
+```
+<!-- /example: actor/ref_types -->
+
+<!-- example: actor/ref -->
+```go
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Follow, _ bool) (actor.OkReply, error) {
+		// ctx.Ref 只在同一 Group 中查找已存在的 Actor —— 不会创建，找不到返回 nil
+		ref := ctx.Ref(req.Target)
+		if ref == nil {
+			return nil, ErrPlayerNotFound
+		}
+		defer ref.Release() // 释放持有，允许目标之后空闲退出
+
+		// RefPost：发后不理，绕过 Group 查找
+		if err := actor.RefPost(ref, &Ping{From: ctx.Id()}); err != nil {
+			return nil, err
+		}
+
+		// RefCall：请求-回复，绕过 Group 查找
+		hp, err := actor.RefCall(ctx.Context(), ref, &QueryHP{})
+		if err != nil {
+			return nil, err
+		}
+		ctx.Logger().Info("target hp", "target", ref.Id(), "hp", hp.HP)
+		return actor.OK, nil
+	})
 })
 ```
+<!-- /example: actor/ref -->
 
 **API 参考：**
 
@@ -496,35 +562,42 @@ ActorRef: RefPost/RefCall → mailbox  （无 Group 查找，无 resolveActor）
 - 超时/取消时：框架自动对「孤儿」回复调用 `Close()`
 - `SafeCall` / `RefSafeCall` 与 `Call` / `RefCall` 对应，但增加了 `SafeReply` 约束
 
+<!-- example: actor/safe_reply -->
 ```go
-// 定义 SafeReply 类型
+// ResourceReply 持有外部资源，实现 SafeReply[ResourceReply]（~*R0 + Close()）。
 type ResourceReply struct {
-    Data   []byte
-    handle *os.File  // 需要清理
+	Data   []byte
+	handle *os.File
 }
 
 func (r *ResourceReply) Close() {
-    if r.handle != nil {
-        r.handle.Close()
-    }
+	if r.handle != nil {
+		_ = r.handle.Close()
+	}
 }
 
-// 注册返回 SafeReply 的处理器
-actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *LoadData, _ bool) (*ResourceReply, error) {
-    f, _ := os.Open("data.bin")
-    data, _ := io.ReadAll(f)
-    return &ResourceReply{Data: data, handle: f}, nil
-})
+type LoadData struct{}
 
-// 使用 SafeCall —— Close() 有保障
-reply, err := actor.SafeCall(ctx, mgr, id, &LoadData{})
-if err != nil {
-    // 若超时/取消：reply.Close() 已被自动调用
-    return err
-}
-defer reply.Close() // 成功时调用方必须关闭
-// 使用 reply.Data...
+func (*LoadData) ReqType(_ PlayerId, _ *ResourceReply) string { return "LoadData" }
 ```
+<!-- /example: actor/safe_reply -->
+
+<!-- example: actor/safe_call -->
+```go
+// SafeCall：成功时调用方负责 Close，超时/取消时由框架兜底 Close。
+func loadData(ctx context.Context, mgr *actor.Manager, id PlayerId) error {
+	resource, err := actor.SafeCall(ctx, mgr, id, &LoadData{})
+	if err != nil {
+		// 超时或取消时框架已经调用过 resource 的 Close()
+		return err
+	}
+	defer resource.Close() // 成功时调用方负责清理
+
+	fmt.Println(len(resource.Data))
+	return nil
+}
+```
+<!-- /example: actor/safe_call -->
 
 | API | 约束 | 成功时清理 | 超时/取消时清理 |
 |-----|-----------|-------------------|--------------------------|
@@ -537,23 +610,72 @@ defer reply.Close() // 成功时调用方必须关闭
 
 ### 7. Manager 生命周期
 
+<!-- example: actor/manager -->
 ```go
-mgr := actor.NewManager(slog.Default())
-
 // 优雅关闭：停止接收新消息，等待所有 Actor 退出
 mgr.CloseManager()
 mgr.JoinManager()
 
 // 检查 Manager 是否已关闭
 if mgr.IsClosed() {
-    // ...
+	slog.Info("manager closed")
 }
 
 // 单 Actor 生命周期
-actor.CloseActor[PlayerId](mgr, id)   // 温和关闭：排空邮箱，完成在途请求
-actor.KillActor[PlayerId](mgr, id)    // 强制关闭：取消 ctx，丢弃待处理
-actor.JoinActor[PlayerId](mgr, id)    // 等待 Actor 的 goroutine 退出
+actor.CloseActor[PlayerId](mgr, playerId) // 温和关闭：排空邮箱，完成在途请求
+actor.KillActor[PlayerId](mgr, playerId)  // 强制关闭：取消 ctx，丢弃待处理
+actor.JoinActor[PlayerId](mgr, playerId)  // 等待 Actor 的 goroutine 退出
 ```
+<!-- /example: actor/manager -->
+
+### 8. CtxValue —— 强类型 Manager context 值
+
+`WithValue` 把强类型值挂到 Manager 根 context 上，之后本 Manager 创建的所有 Actor 都能
+从 `ctx.Context()` 取到。用于把 ID 分配器、时钟等基础设施句柄送给各处理器，替代进程级单例
+——同进程多 Manager 并存时各持一份，互不可见。
+
+<!-- example: actor/ctx_value -->
+```go
+// 定义 per-Manager 的强类型 context 值：key 由句柄自带，写入与读取都在编译期检查类型，
+// 不需要手写私有 key struct 与类型断言。
+var SeqAllocValue = actor.DefineValue[*SeqAlloc]()
+
+// SeqAlloc 是挂在 Manager 上的基础设施句柄（如 ID 分配器）。
+type SeqAlloc struct{ n int }
+
+// Next 只在所属 Manager 的 actor 内调用，因此无需加锁。
+func (a *SeqAlloc) Next() int {
+	a.n++
+	return a.n
+}
+```
+<!-- /example: actor/ctx_value -->
+
+<!-- example: actor/ctx_value_use -->
+```go
+// 必须在任何 Serve 之前挂载：Group 创建时捕获当时的 Manager context，
+// 之后挂载的值对已注册的 Group 不可见（框架直接 panic，避免静默失效）。
+actor.WithValue(mgr, SeqAllocValue, &SeqAlloc{})
+
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, PlayerState]) {
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, PlayerState], req *Login, _ bool) (actor.OkReply, error) {
+		alloc, ok := SeqAllocValue.Get(ctx.Context()) // 编译期已知类型，无需断言
+		if !ok {
+			return actor.OK, errors.New("seq alloc not mounted")
+		}
+		ctx.Open()
+		ctx.SetState(PlayerState{HP: req.InitHP, Level: alloc.Next()})
+		return actor.OK, nil
+	})
+})
+```
+<!-- /example: actor/ctx_value_use -->
+
+| API | 说明 |
+|-----|------|
+| `actor.DefineValue[T]()` | 定义 per-Manager 的强类型值句柄。key 由句柄自带，多次定义互不冲突。 |
+| `actor.WithValue(mgr, v, value)` | 挂载值。**必须在任何 `Serve` 之前**调用，否则 panic（避免对已注册 Group 静默失效）。 |
+| `v.Get(ctx)` | 以 `(T, bool)` 读取；未挂载时返回零值与 `false`。 |
 
 ## RPC
 
@@ -561,46 +683,58 @@ actor.JoinActor[PlayerId](mgr, id)    // 等待 Actor 的 goroutine 退出
 
 ### 服务端
 
+<!-- example: rpc/server -->
 ```go
-mgr := actor.NewManager(slog.Default())
-// ... 注册处理器 ...
-
 server := rpc.NewServer[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport](
-    ":8080", mgr,
-    func(b *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec]) {
-        rpc.RegisterRequest(b, &Login{})
-        rpc.RegisterRequest(b, &Attack{})
-        rpc.RegisterRequest(b, &Close{})
-    },
+	":8080", mgr,
+	func(b *rpc.RegistryBuilder[json.RawMessage, rpc.JsonCodec]) {
+		rpc.RegisterRequest(b, &DemoLogin{})
+		rpc.RegisterRequest(b, &DemoAttack{})
+		rpc.RegisterRequest(b, &DemoClose{})
+	},
 )
-server.Start() // 非阻塞
-// server.Run() // 阻塞
+if err := server.Start(); err != nil { // 非阻塞；需要阻塞时改用 server.Run()
+	slog.Error("server start failed", "err", err)
+}
 
-// 优雅关闭
+// 优雅关闭：等待在途请求处理完
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-server.Shutdown(ctx)
+if err := server.Shutdown(ctx); err != nil {
+	slog.Error("server shutdown failed", "err", err)
+}
 ```
+<!-- /example: rpc/server -->
 
 ### 客户端
 
+<!-- example: rpc/client -->
 ```go
-client := rpc.NewClient[json.RawMessage, rpc.JsonCodec, rpc.JsonTransport]("localhost:8080")
-client.Connect()
-defer client.Close()
-
 // 远程 Post（发后不理）
-rpc.Post(client, playerId, &Login{InitHP: 100, InitLevel: 1})
+if err := rpc.Post(client, playerId, &DemoLogin{InitHP: 100}); err != nil {
+	slog.Error("post login failed", "err", err)
+}
 
 // 远程 Call
-reply, err := rpc.Call(ctx, client, playerId, &Attack{Damage: 30})
+reply, err := rpc.Call(ctx, client, playerId, &DemoAttack{Damage: 30})
+if err != nil {
+	slog.Error("call attack failed", "err", err)
+}
+slog.Info("attacked", "remainingHP", reply.RemainingHP)
 
 // 带超时的远程 Call
-reply, err = rpc.CallTimeout(ctx, client, playerId, &Attack{Damage: 10}, 5*time.Second)
+reply, err = rpc.CallTimeout(ctx, client, playerId, &DemoAttack{Damage: 10}, 5*time.Second)
+if err != nil {
+	slog.Error("call attack with timeout failed", "err", err)
+}
+slog.Info("attacked", "remainingHP", reply.RemainingHP)
 
 // 远程 Broadcast
-rpc.Broadcast(client, &Close{})
+if err := rpc.Broadcast(client, &DemoClose{}); err != nil {
+	slog.Error("broadcast failed", "err", err)
+}
 ```
+<!-- /example: rpc/client -->
 
 ### 线上格式
 
@@ -636,63 +770,52 @@ Actor **不会**在处理 spawn 消息前被自动激活。你需通过 `ctx.Ope
 
 ### 快速示例
 
+<!-- example: grain/setup -->
 ```go
-import (
-    "github.com/lcy03406/actor-go/actor"
-    "github.com/lcy03406/actor-go/grain"
-)
-
-// 当业务数据可直接序列化时使用 ShotSelf
-type PlayerData struct {
-    HP    int `json:"hp"`
-    Level int `json:"level"`
-}
-
-// 为可读性定义 State 类型别名
-type GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
-
-// 创建 PersistenceManager：租约内建于 driver，无需单独的租约管理器
+// PersistenceManager 聚合 driver + 租约；租约内建于 driver，无需单独的租约管理器。
 pm := grain.NewPersistenceManager(
-    grain.WithDriver(grain.NewJsonDriver("./data")),
-    grain.WithNodeId("node-1"),
+	grain.WithDriver(grain.NewJsonDriver("./grain_data")),
+	grain.WithNodeId("node-1"),
+	grain.WithAutoPersistInterval(5*time.Second),
 )
 
-// 注册：spawn 处理器显式激活 Grain
-actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
-    actor.RegisterSpawn(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Login, _ bool) (actor.OkReply, error) {
-        res, err := ctx.State().Activate(ctx, pm)
-        if err != nil {
-            return actor.OK, err
-        }
-        if res == grain.ActivateCreated { // 仅首次创建时初始化
-            ctx.State().Data.HP = req.InitHP
-            ctx.State().Data.Level = req.InitLevel
-        }
-        ctx.State().Persist(ctx)  // 立即保存
-        return actor.OK, nil
-    })
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
+	// 生命周期托管给框架：OnSpawn 自动 Activate + 定时存盘，退出时自动 Persist + 释放租约。
+	grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
+		if created { // 仅首次创建时初始化业务数据
+			ctx.State().Data.HP = 100
+			ctx.State().Data.Level = 1
+		}
+		return nil
+	})
 
-    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *Attack, _ bool) (*AttackReply, error) {
-        ctx.State().Data.HP -= req.Damage
-        alive := ctx.State().Data.HP > 0
-        return &AttackReply{RemainingHP: ctx.State().Data.HP, Alive: alive}, nil
-    })
+	// 业务 handler 只关心业务：不再手动 Activate / Persist / Deactivate。
+	actor.RegisterSpawn(b, func(ctx *GrainCtx, req *Login, _ bool) (actor.OkReply, error) {
+		ctx.State().Data.HP = req.InitHP
+		return actor.OK, nil
+	})
 
-    actor.RegisterQuery(b, func(ctx *actor.ActorContext[PlayerId, GrainState], req *SaveAndQuit, _ bool) (actor.OkReply, error) {
-        ctx.State().Deactivate(ctx)  // 保存 + 释放租约 + 退出
-        return actor.OK, nil
-    })
+	actor.RegisterQuery(b, func(ctx *GrainCtx, req *Attack, _ bool) (*AttackReply, error) {
+		ctx.State().Data.HP -= req.Damage
+		return &AttackReply{RemainingHP: ctx.State().Data.HP}, nil
+	})
 })
 ```
+<!-- /example: grain/setup -->
 
 ### Grain State 方法
 
+<!-- example: grain/state -->
 ```go
 state := ctx.State()
-state.Data           // 你的业务数据（D）
-state.Persist(ctx)   // 立即保存，保持运行（同时续租租约 TTL）
-state.Deactivate(ctx)  // 保存 + 释放租约 + 退出
+ctx.Logger().Info("hp", "hp", state.Data.HP) // Data：业务数据（D）
+
+if err := state.Persist(ctx); err != nil { // 立即存盘并续租，Actor 继续运行
+	return actor.OK, err
+}
+state.Deactivate(ctx) // 存盘 + 释放租约 + 退出
 ```
+<!-- /example: grain/state -->
 
 ### 生命周期
 
@@ -748,28 +871,60 @@ state.Deactivate(ctx)  // 保存 + 释放租约 + 退出
 - **owner**：权威数据所在的业务 actor（`world` / `family` 等），数据变更时 `Publish`；
 - **读者**：State 内嵌 `shared.Reader`，`Watch` 首次向容器订阅并取快照，此后由推送更新本地缓存。
 
+<!-- example: shared/keys -->
 ```go
-// ── 定义 key（编译期绑定值类型，pattern 全局唯一，可带占位符）──
+// 定义 key：值类型在编译期与 key 绑定，pattern 全局唯一，可带占位符。
 var (
-    WorldSeed  = shared.Define[int64]("world/%s/seed", shared.Immutable())
-    FamilyTech = shared.Define[TechState]("family/%s/tech",
-        shared.WithCooldown(50*time.Millisecond), shared.WithTTL(30*time.Second))
+	WorldSeed  = shared.Define[int64]("world/%s/seed", shared.Immutable())
+	FamilyTech = shared.Define[TechState]("family/%s/tech",
+		shared.WithCooldown(50*time.Millisecond), shared.WithTTL(30*time.Second))
 )
+```
+<!-- /example: shared/keys -->
 
-// ── 启动：注册容器 Group（分片数进程内必须一致）──
+<!-- example: shared/usage -->
+```go
+// 启动：注册容器 Group（分片数在进程内必须一致，重复 Serve 会 panic）
 shared.Serve(mgr, shared.Options{Shards: 4, Cooldown: 50 * time.Millisecond})
 
-// ── owner 发布（权威数据仍在自己手里，容器只做分发）──
-shared.Publish(ctx, WorldSeed.Of(worldID), s.Seed)
-
-// ── 读者：Group 注册一次，之后可订阅任意 key ──
-type RegionState struct{ Vars shared.Reader }
-actor.Serve(mgr, opts, func(b *actor.RegistryBuilder[RegionId, RegionState]) {
-    shared.ServeReader(b, func(s *RegionState) *shared.Reader { return &s.Vars })
+// owner：权威数据仍在自己手里，变更时 Publish，容器只负责分发
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[WorldId, WorldState]) {
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[WorldId, WorldState], req *InitWorld, _ bool) (actor.OkReply, error) {
+		ctx.Open()
+		ctx.State().Seed = req.Seed
+		return actor.OK, shared.Publish(ctx, WorldSeed.Of(ctx.Id()), ctx.State().Seed)
+	})
 })
-seed, err := shared.Watch(ctx, &s.Vars, WorldSeed.Of(worldID))  // 订阅缓存
-seed, err := shared.Fetch(ctx, WorldSeed.Of(worldID))          // 强一致读取（不订阅）
+
+// 读者：Group 只需注册一次 ServeReader，之后可 Watch 任意 key
+actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[RegionId, RegionState]) {
+	shared.ServeReader(b, func(s *RegionState) *shared.Reader { return &s.Vars })
+
+	actor.RegisterSpawn(b, func(ctx *actor.ActorContext[RegionId, RegionState], req *EnterRegion, _ bool) (actor.OkReply, error) {
+		ctx.Open()
+
+		// 首次 Watch 订阅并取回快照，之后命中本地缓存（由容器推送更新）
+		seed, err := shared.Watch(ctx, &ctx.State().Vars, WorldSeed.Of(req.World))
+		if err != nil {
+			return actor.OK, err
+		}
+		ctx.State().Seed = seed
+
+		// 需要"必须最新"的读取用 Fetch：每次触网、不订阅、不写缓存
+		latest, err := shared.Fetch(ctx, WorldSeed.Of(req.World))
+		if err != nil {
+			return actor.OK, err
+		}
+		ctx.Logger().Info("joined", "seed", latest)
+		return actor.OK, nil
+	})
+})
+
+// 业务侧：先由 owner 发布，再让读者订阅
+_ = actor.Post(mgr, worldID, &InitWorld{Seed: 42})
+_ = actor.Post(mgr, regionID, &EnterRegion{World: worldID})
 ```
+<!-- /example: shared/usage -->
 
 **一致性语义（最终一致）**
 
@@ -789,6 +944,7 @@ seed, err := shared.Fetch(ctx, WorldSeed.Of(worldID))          // 强一致读�
 | 编译期安全 | `Request[A, R]` 绑定 Id/Reply；跨 Group 错误由编译器捕获 |
 | Post 约束 | 仅限 `Request[A, OkReply]`；自定义回复必须用 `Call` |
 | 自动创建 | 首条消息触发 Actor 创建（RegisterSpawn / RegisterServe） |
+| 显式 Open | spawn 处理器不调 `ctx.Open()`（Grain 为 `State.Activate`）时，Actor 处理完本条消息即被回收 |
 | 排空 | 关闭前排空邮箱；消息不丢失 |
 | 上下文超时 | `Call(ctx, ...)` 支持超时与取消 |
 | 可取消定时器 | `ctx.Timer()` 返回定时器 ID，`ctx.StopTimer(id)` 取消 |

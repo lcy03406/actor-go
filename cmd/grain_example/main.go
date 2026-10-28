@@ -17,8 +17,10 @@ import (
 // ─── Type Aliases (for readability) ───
 
 type (
-	PlayerId   = grainPlayerId
-	GrainState = grain.State[PlayerId, PlayerData, PlayerData, *grain.ShotSelf[PlayerData]]
+	PlayerId = grainPlayerId
+	// GrainState 的最后一个参数是 Snapshotter：ShotSelf 的方法都是值接收者，
+	// 必须用值类型 grain.ShotSelf[PlayerData]；写成指针会在 Activate 时 nil 指针 panic。
+	GrainState = grain.State[PlayerId, PlayerData, PlayerData, grain.ShotSelf[PlayerData]]
 	GrainCtx   = actor.ActorContext[PlayerId, GrainState]
 	RegBuilder = actor.RegistryBuilder[PlayerId, GrainState]
 )

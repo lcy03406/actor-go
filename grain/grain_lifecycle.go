@@ -34,8 +34,8 @@ type OnActivateFn[A actor.ActorId, S any, P any, K Snapshotter[S, P]] func(
 //	    grain.WithAutoPersistInterval(30*time.Second),
 //	)
 //
-//	actor.Serve(mgr, 100, func(b *actor.RegistryBuilder[PlayerId, *grain.State[PlayerId, PlayerData, PlayerSnapshot]]) {
-//	    grain.SetupGrain(b, pm, func(ctx, created bool) error {
+//	actor.Serve(mgr, actor.Options{BufMails: 100}, func(b *actor.RegistryBuilder[PlayerId, GrainState]) {
+//	    grain.SetupGrain(b, pm, func(ctx *GrainCtx, created bool) error {
 //	        if created {
 //	            ctx.State().Data.HP = 100 // 首次创建初始化
 //	        }
@@ -43,6 +43,9 @@ type OnActivateFn[A actor.ActorId, S any, P any, K Snapshotter[S, P]] func(
 //	    })
 //	    actor.RegisterSpawn(b, handleLogin)
 //	})
+//
+// 注意 GrainState 的最后一个类型参数是 Snapshotter：ShotSelf 的方法都是值接收者，
+// 必须用值类型 grain.ShotSelf[D]，写成 *grain.ShotSelf[D] 会在 Activate 时 nil 指针 panic。
 func SetupGrain[A actor.ActorId, S any, P any, K Snapshotter[S, P]](
 	b *actor.RegistryBuilder[A, State[A, S, P, K]],
 	pm *PersistenceManager,
