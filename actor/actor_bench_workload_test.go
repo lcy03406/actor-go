@@ -55,6 +55,7 @@ func BenchmarkV2CallCPUWorkload(b *testing.B) {
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			*a.State() = WorkloadState{Value: req.Init, Data: make(map[string]int)}
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *FibReq, _ bool) (*FibReply, error) {
@@ -91,6 +92,7 @@ func BenchmarkV2CallStringWorkload(b *testing.B) {
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.State().Value = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *StrProcReq, _ bool) (*StrProcReply, error) {
@@ -149,6 +151,7 @@ func BenchmarkV2CallMapWorkload(b *testing.B) {
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			*a.State() = WorkloadState{Value: req.Init, Data: make(map[string]int)}
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(bb, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *MapOpsReq, _ bool) (*MapOpsReply, error) {
@@ -250,6 +253,7 @@ func setupGameManagerV2(mgr *actor.Manager) {
 				Pos:    Position{X: 0, Y: 0},
 				Status: "idle",
 			})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[GamePlayerId, GamePlayerState], req *GameMoveReq, _ bool) (actor.OkReply, error) {
@@ -374,6 +378,7 @@ func setupChatManagerV2(mgr *actor.Manager) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[ChatRoomId, ChatRoomState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[ChatRoomId, ChatRoomState], req *ChatCreateReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(ChatRoomState{Members: make(map[int]string)})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[ChatRoomId, ChatRoomState], req *ChatJoinReq, _ bool) (actor.OkReply, error) {
@@ -498,6 +503,7 @@ func BenchmarkV2ECommerceScenario(b *testing.B) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[EOrderId, EOrderState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[EOrderId, EOrderState], req *EOrderCreateReq, spawning bool) (actor.OkReply, error) {
 			a.SetState(EOrderState{Status: "open"})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[EOrderId, EOrderState], req *EOrderAddItemReq, _ bool) (*EOrderAddItemReply, error) {
@@ -565,6 +571,7 @@ func BenchmarkV2ActorLifecycle(b *testing.B) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init, Data: make(map[string]int)})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *MapOpsReq, _ bool) (*MapOpsReply, error) {
@@ -601,6 +608,7 @@ func BenchmarkV2MixedWorkload(b *testing.B) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *FibReq, _ bool) (*FibReply, error) {
@@ -663,6 +671,7 @@ func BenchmarkV2MixedWorkloadNoSpawn(b *testing.B) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *FibReq, _ bool) (*FibReply, error) {
@@ -724,6 +733,7 @@ func BenchmarkV2MixedWorkloadChurn(b *testing.B) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[WorkloadId, WorkloadState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *WorkloadSpawn, spawning bool) (actor.OkReply, error) {
 			a.SetState(WorkloadState{Value: req.Init})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[WorkloadId, WorkloadState], req *FibReq, _ bool) (*FibReply, error) {
@@ -835,6 +845,7 @@ func BenchmarkV2StatefulGrowingWorkload(b *testing.B) {
 				Slice:   make([]int, 0, 1024),
 				MapData: make(map[string]int),
 			})
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(bb, func(a *actor.ActorContext[GrowStateId, GrowState], req *GrowAppendReq, _ bool) (*GrowAppendReply, error) {

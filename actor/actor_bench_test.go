@@ -61,6 +61,7 @@ func setupBenchManagerV2(mgr *actor.Manager) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchAdd, _ bool) (*BenchAddReply, error) {
@@ -74,6 +75,7 @@ func setupBenchManagerV2(mgr *actor.Manager) {
 		// RegisterServe = spawn + query，用于 spawn benchmark
 		actor.RegisterServe(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLoginWithReply, spawning bool) (*BenchAddReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return &BenchAddReply{Result: a.State().N}, nil
 		})
 	})
@@ -114,6 +116,7 @@ func BenchmarkV2Post(b *testing.B) {
 	actor.Serve(mgr, optoins, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchPing, _ bool) (actor.OkReply, error) {
@@ -136,6 +139,7 @@ func BenchmarkV2PostThenCall(b *testing.B) {
 	actor.Serve(mgr, options, func(bb *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(bb, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(bb, func(a *actor.ActorContext[BenchId, BenchState], req *BenchPing, _ bool) (actor.OkReply, error) {
@@ -204,6 +208,7 @@ func BenchmarkV2Broadcast(b *testing.B) {
 	actor.Serve(mgr, options, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchAdd, _ bool) (*BenchAddReply, error) {
@@ -281,6 +286,7 @@ func BenchmarkV2PostParallel(b *testing.B) {
 	actor.Serve(mgr, optoins, func(b *actor.RegistryBuilder[BenchId, BenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[BenchId, BenchState], req *BenchPing, _ bool) (actor.OkReply, error) {
@@ -368,6 +374,7 @@ func BenchmarkV2PostSmallMailbox(b *testing.B) {
 			actor.Serve(mgr, optoins, func(bb *actor.RegistryBuilder[BenchId, BenchState]) {
 				actor.RegisterSpawn(bb, func(a *actor.ActorContext[BenchId, BenchState], req *BenchLogin, spawning bool) (actor.OkReply, error) {
 					a.State().N = req.Init
+					a.Open()
 					return actor.OK, nil
 				})
 				actor.RegisterQuery(bb, func(a *actor.ActorContext[BenchId, BenchState], req *BenchPing, _ bool) (actor.OkReply, error) {

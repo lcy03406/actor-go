@@ -75,6 +75,7 @@ func setupRefBenchManager(mgr *actor.Manager) {
 	actor.Serve(mgr, actor.Options{BufMails: 1024}, func(b *actor.RegistryBuilder[RefBenchId, RefBenchState]) {
 		actor.RegisterSpawn(b, func(a *actor.ActorContext[RefBenchId, RefBenchState], req *RefBenchLogin, _ bool) (actor.OkReply, error) {
 			a.State().N = req.Init
+			a.Open()
 			return actor.OK, nil
 		})
 		actor.RegisterQuery(b, func(a *actor.ActorContext[RefBenchId, RefBenchState], req *RefBenchAdd, _ bool) (*RefBenchAddReply, error) {
