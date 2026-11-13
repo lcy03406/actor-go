@@ -36,3 +36,6 @@ coverage.html
 tmp/
 
 cmd/engineering_example/data/
+
+*.log
+*.log.gz
